@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 학교 도메인만 허용하려면 아래 줄의 주석을 풀고 도메인을 바꾸세요.
+    function isMember() {
+      return request.auth != null;
+      // && request.auth.token.email.matches('.*@school[.]hs[.]kr$');
+    }
+
+    match /users/{uid} {
+      allow read: if isMember();
+      allow write: if isMember() && request.auth.uid == uid;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isMember();
+      allow create: if isMember()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 40;
+
+      match /messages/{msgId} {
+        allow read: if isMember();
+        // 본인 이름으로만 작성 가능, 수정 불가, 본인 메시지만 삭제 가능
+        allow create: if isMember()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.type in ['text', 'file']
+          && (request.resource.data.type != 'text' || request.resource.data.text.size() <= 2000);
+        allow delete: if isMember() && resource.data.uid == request.auth.uid;
+      }
+    }
+  }
+}
