@@ -2,9 +2,17 @@ import { firebaseConfig, ALLOWED_EMAIL_DOMAIN, MAX_FILE_MB } from "./firebase-co
 
 // ---------- 백엔드 선택 (설정 전이면 데모 모드) ----------
 const isConfigured = !firebaseConfig.apiKey.startsWith("YOUR_");
-const backend = isConfigured
-  ? (await import("./backend-firebase.js")).createFirebaseBackend(firebaseConfig, { allowedDomain: ALLOWED_EMAIL_DOMAIN })
-  : (await import("./backend-demo.js")).createDemoBackend();
+let backend;
+try {
+  backend = isConfigured
+    ? (await import("./backend-firebase.js")).createFirebaseBackend(firebaseConfig, { allowedDomain: ALLOWED_EMAIL_DOMAIN })
+    : (await import("./backend-demo.js")).createDemoBackend();
+} catch (err) {
+  // Firebase 라이브러리를 못 불러오면(네트워크 차단 등) 빈 화면 대신 안내 표시
+  document.body.innerHTML = `<p style="margin:auto;padding:24px;text-align:center">
+    서버에 연결하지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.</p>`;
+  throw err;
+}
 
 const $ = (id) => document.getElementById(id);
 $("demo-banner").hidden = isConfigured;
