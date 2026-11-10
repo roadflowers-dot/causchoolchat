@@ -1,12 +1,12 @@
 // Firebase 콘솔 → 프로젝트 설정 → 내 앱(웹)에서 복사한 값을 붙여넣으세요.
 // 값이 "YOUR_..." 그대로면 데모 모드(브라우저 안에서만 동작)로 실행됩니다.
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyBMxto6h-XbIraaMje6HF1vzRYplUgCCtw",
+  authDomain: "causchoolchat.firebaseapp.com",
+  projectId: "causchoolchat",
+  storageBucket: "causchoolchat.firebasestorage.app",
+  messagingSenderId: "128145548456",
+  appId: "1:128145548456:web:53bff36048166e0c100e9d",
 };
 
 // 학교 도메인 계정만 허용하려면 입력하세요. 예: "school.hs.kr"
