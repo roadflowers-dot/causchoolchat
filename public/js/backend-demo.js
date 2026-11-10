@@ -16,11 +16,12 @@ export function createDemoBackend() {
       { id: "m1", type: "text", uid: friend.uid, name: friend.name, text: "내일 체육 수업 운동장에서 한대!", createdAt: t(30) },
       { id: "m2", type: "text", uid: me.uid, name: me.name, text: "오 알려줘서 고마워 👍", createdAt: t(28) },
       { id: "m3", type: "file", uid: friend.uid, name: friend.name, createdAt: t(10),
-        file: { name: "가정통신문_11월.pdf", size: 482133, contentType: "application/pdf", url: "#" } },
+        file: { id: "f1", name: "가정통신문_11월.pdf", size: 482133, contentType: "application/pdf" } },
     ],
     r2: [{ id: "m4", type: "text", uid: friend.uid, name: friend.name, text: "이번 주 실험 준비물 정리해서 올릴게", createdAt: t(120) }],
     r3: [],
   };
+  const blobs = { f1: new Blob(["데모 파일입니다."], { type: "text/plain" }) }; // fileId -> Blob
   const roomSubs = new Set();
   const msgSubs = new Map(); // roomId -> Set(cb)
 
@@ -47,14 +48,18 @@ export function createDemoBackend() {
 
     listenMessages(roomId, cb) { const off = sub(roomId, cb); cb([...(messages[roomId] || [])]); return off; },
     listenFiles(roomId, cb) {
-      const wrap = (list) => cb(list.filter((m) => m.type === "file").reverse());
+      const wrap = (list) => cb(list.filter((m) => m.type === "file").reverse()
+        .map((m) => ({ ...m.file, uploaderName: m.name, createdAt: m.createdAt })));
       const off = sub(roomId, wrap); wrap(messages[roomId] || []); return off;
     },
 
     async sendText(roomId, text) { push(roomId, { type: "text", text }); },
     async sendFile(roomId, file, onProgress) {
       for (let p = 0; p <= 1; p += 0.25) { onProgress?.(p); await new Promise((r) => setTimeout(r, 120)); }
-      push(roomId, { type: "file", file: { name: file.name, size: file.size, contentType: file.type, url: URL.createObjectURL(file) } });
+      const id = crypto.randomUUID();
+      blobs[id] = file;
+      push(roomId, { type: "file", file: { id, name: file.name, size: file.size, contentType: file.type } });
     },
+    async getFileBlob(roomId, file) { return blobs[file.id]; },
   };
 }

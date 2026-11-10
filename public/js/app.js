@@ -100,15 +100,42 @@ function messageEl(m) {
   return wrap;
 }
 
+// 파일은 Firestore에 조각으로 저장돼 있어서, 필요할 때 받아서 합친 뒤 Blob URL로 보여줌 (한 번 받은 건 캐시)
+const blobUrlCache = new Map();
+function fileUrl(file) {
+  if (!blobUrlCache.has(file.id)) {
+    const p = backend.getFileBlob(currentRoom.id, file).then((b) => URL.createObjectURL(b));
+    p.catch(() => blobUrlCache.delete(file.id));
+    blobUrlCache.set(file.id, p);
+  }
+  return blobUrlCache.get(file.id);
+}
+
+async function downloadFile(file) {
+  try {
+    const a = document.createElement("a");
+    a.href = await fileUrl(file);
+    a.download = file.name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+  } catch (err) {
+    alert("파일을 받지 못했어요: " + err.message);
+  }
+}
+
 function fileEl(file, asCard = false) {
   if (!asCard && file.contentType?.startsWith("image/")) {
-    const a = el("a"); a.href = file.url; a.target = "_blank"; a.rel = "noopener";
-    const img = el("img", "img-preview"); img.src = file.url; img.alt = file.name;
-    a.append(img);
-    return a;
+    const img = el("img", "img-preview");
+    img.alt = file.name;
+    img.title = "클릭하면 저장";
+    fileUrl(file).then((url) => (img.src = url)).catch(() => (img.alt = "이미지를 불러오지 못했어요"));
+    img.onclick = () => downloadFile(file);
+    return img;
   }
   const a = el("a", "file-card");
-  a.href = file.url; a.target = "_blank"; a.rel = "noopener"; a.download = file.name;
+  a.href = "#";
+  a.onclick = (e) => { e.preventDefault(); downloadFile(file); };
   a.append(el("span", "ico", fileIcon(file.contentType)));
   const info = el("div");
   info.append(el("div", "name", file.name), el("div", "size", formatSize(file.size)));
@@ -148,10 +175,10 @@ function renderFiles(files) {
   const list = $("file-list");
   list.innerHTML = "";
   if (!files.length) list.innerHTML = `<li class="empty">공유된 파일이 없어요.</li>`;
-  for (const m of files) {
+  for (const f of files) {
     const li = el("li");
-    const card = fileEl(m.file, true); // 목록에선 이미지도 카드로 표시
-    card.querySelector(".size").textContent += ` · ${m.name}`;
+    const card = fileEl(f, true); // 목록에선 이미지도 카드로 표시
+    card.querySelector(".size").textContent += ` · ${f.uploaderName}`;
     li.append(card);
     list.append(li);
   }

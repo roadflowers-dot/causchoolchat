@@ -7,6 +7,11 @@ service cloud.firestore {
       // && request.auth.token.email.matches('.*@school[.]hs[.]kr$');
     }
 
+    // 파일 크기 제한: 5MB (= 900KB 조각 최대 6개). firebase-config.js의 MAX_FILE_MB와 맞추세요.
+    function maxFileBytes() { return 5 * 1024 * 1024; }
+    function maxChunks() { return 6; }
+    function chunkBytes() { return 900 * 1024; }
+
     match /users/{uid} {
       allow read: if isMember();
       allow write: if isMember() && request.auth.uid == uid;
@@ -19,14 +24,57 @@ service cloud.firestore {
         && request.resource.data.name is string
         && request.resource.data.name.size() <= 40;
 
+      function fileDoc(fileId) {
+        return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId);
+      }
+
       match /messages/{msgId} {
         allow read: if isMember();
-        // 본인 이름으로만 작성 가능, 수정 불가, 본인 메시지만 삭제 가능
+        // 본인 이름으로만 작성, 수정 불가, 본인 메시지만 삭제
         allow create: if isMember()
           && request.resource.data.uid == request.auth.uid
-          && request.resource.data.type in ['text', 'file']
-          && (request.resource.data.type != 'text' || request.resource.data.text.size() <= 2000);
+          && (
+            (request.resource.data.type == 'text'
+              && request.resource.data.text is string
+              && request.resource.data.text.size() <= 2000)
+            ||
+            (request.resource.data.type == 'file'
+              && getAfter(fileDoc(request.resource.data.file.id)).data.uid == request.auth.uid)
+          );
         allow delete: if isMember() && resource.data.uid == request.auth.uid;
+      }
+
+      // 파일 정보 (Cloud Storage 대신 Firestore에 저장 — 무료 요금제용)
+      // 조각(chunks)을 먼저 올린 뒤 만들 수 있음. 첫 조각과 마지막 조각이 본인 것인지 확인.
+      match /files/{fileId} {
+        function chunk(i) {
+          return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId)/chunks/$(string(i));
+        }
+        allow read: if isMember();
+        allow create: if isMember()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 200
+          && request.resource.data.size is int
+          && request.resource.data.size <= maxFileBytes()
+          && request.resource.data.chunkCount is int
+          && request.resource.data.chunkCount >= 1
+          && request.resource.data.chunkCount <= maxChunks()
+          && get(chunk(0)).data.uid == request.auth.uid
+          && get(chunk(request.resource.data.chunkCount - 1)).data.uid == request.auth.uid;
+        allow delete: if isMember() && resource.data.uid == request.auth.uid;
+
+        // 파일 내용 조각 (0, 1, 2, ...) — 새로 만들기만 가능, 덮어쓰기 불가
+        match /chunks/{chunkId} {
+          allow read: if isMember();
+          allow create: if isMember()
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.i == int(chunkId)
+            && request.resource.data.i < maxChunks()
+            && request.resource.data.data is bytes
+            && request.resource.data.data.size() <= chunkBytes();
+          allow delete: if isMember() && resource.data.uid == request.auth.uid;
+        }
       }
     }
   }

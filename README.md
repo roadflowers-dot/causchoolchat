@@ -4,12 +4,28 @@
 
 ## 구성
 
+**Firebase 무료(Spark) 요금제 안에서만 동작**하도록 만들었습니다. 결제 수단 등록이 필요 없습니다.
+
 | 기능 | 사용 기술 |
 | --- | --- |
 | 구글 로그인 | Firebase Authentication |
 | 실시간 채팅 | Cloud Firestore (`onSnapshot`) |
-| 파일 공유 | Firebase Storage (기본 10MB 제한) |
+| 파일 공유 | Cloud Firestore에 900KB 조각으로 나눠 저장 (파일당 5MB 제한) |
 | 호스팅 | Firebase Hosting |
+
+> Cloud Storage for Firebase는 이제 유료(Blaze) 요금제에서만 쓸 수 있어서 사용하지 않습니다.
+
+### 무료 한도 (Spark 요금제, 하루 기준)
+
+| 항목 | 한도 | 이 앱에서 쓰는 곳 |
+| --- | --- | --- |
+| Firestore 저장 용량 | 총 1 GiB | 메시지 + **공유 파일** (5MB 파일 약 200개 분량) |
+| Firestore 읽기 | 5만 회/일 | 방 입장 시 최근 메시지 50개 + 새 메시지마다 1회, 파일 받기 시 조각 수만큼 |
+| Firestore 쓰기 | 2만 회/일 | 메시지 1회, 파일은 조각 수 + 2회 |
+| Hosting 전송량 | 360 MB/일 | 웹페이지 파일 (매우 작음) |
+
+한도를 넘으면 요금이 나가는 게 아니라 **그날은 해당 기능이 멈추고** 다음 날 초기화됩니다.
+Firebase 콘솔 → 사용량 및 결제에서 사용량을 확인할 수 있습니다.
 
 빌드 도구 없이 HTML/CSS/JS만으로 되어 있습니다.
 
@@ -22,7 +38,6 @@ public/
   js/backend-firebase.js   실제 서비스용 (Auth + Firestore + Storage)
   js/backend-demo.js       설정 전 화면 확인용 가짜 데이터
 firestore.rules            DB 보안 규칙
-storage.rules              파일 보안 규칙
 ```
 
 ## 데이터 구조
@@ -30,9 +45,10 @@ storage.rules              파일 보안 규칙
 ```
 users/{uid}                          name, email, photo, lastSeen
 rooms/{roomId}                       name, createdBy, createdAt
-rooms/{roomId}/messages/{msgId}      type("text"|"file"), text, file{name,size,contentType,url,path},
+rooms/{roomId}/messages/{msgId}      type("text"|"file"), text, file{id,name,size,contentType},
                                      uid, name, photo, createdAt
-Storage: rooms/{roomId}/{uid}/{시간}_{파일명}
+rooms/{roomId}/files/{fileId}        name, size, contentType, chunkCount, uid, uploaderName, createdAt
+rooms/{roomId}/files/{fileId}/chunks/{0,1,..}   i, uid, data(bytes, 최대 900KB)
 ```
 
 ## 실행
@@ -46,9 +62,9 @@ cd public && python3 -m http.server 8000
 ### 2. 실제 서비스 연결
 1. [Firebase 콘솔](https://console.firebase.google.com)에서 프로젝트 생성
 2. Authentication → 로그인 방법 → **Google** 사용 설정
-3. Firestore Database, Storage 생성
+3. Firestore Database 생성 (Storage는 만들지 않아도 됩니다. 요금제는 **Spark 그대로** 두세요)
 4. 프로젝트 설정 → 웹 앱 추가 → 설정값을 `public/js/firebase-config.js`에 붙여넣기
-5. (선택) 학교 계정만 허용: `ALLOWED_EMAIL_DOMAIN`과 `firestore.rules`, `storage.rules`의 주석 부분에 도메인 입력
+5. (선택) 학교 계정만 허용: `ALLOWED_EMAIL_DOMAIN`과 `firestore.rules`의 주석 부분에 도메인 입력
 6. 배포
    ```bash
    npm i -g firebase-tools
