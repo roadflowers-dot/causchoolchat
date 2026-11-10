@@ -35,7 +35,7 @@ public/
   css/style.css            스타일 (모바일 대응)
   js/app.js                화면 로직
   js/firebase-config.js    Firebase 설정값, 허용 도메인, 파일 크기 제한
-  js/backend-firebase.js   실제 서비스용 (Auth + Firestore + Storage)
+  js/backend-firebase.js   실제 서비스용 (Auth + Firestore)
   js/backend-demo.js       설정 전 화면 확인용 가짜 데이터
 firestore.rules            DB 보안 규칙
 ```
