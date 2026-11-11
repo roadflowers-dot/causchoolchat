@@ -22,25 +22,50 @@ service cloud.firestore {
       allow create: if isMember()
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.name is string
-        && request.resource.data.name.size() <= 40;
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 40
+        && request.resource.data.keys().hasOnly(['name', 'createdBy', 'createdAt']);
+      // 메시지를 보낼 때 '마지막 메시지'(목록 미리보기·알림용)만 갱신 가능
+      allow update: if isMember()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageAt', 'lastMessage'])
+        && request.resource.data.lastMessageAt == request.time
+        && request.resource.data.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
+        && request.resource.data.lastMessage.uid == request.auth.uid
+        && request.resource.data.lastMessage.text is string
+        && request.resource.data.lastMessage.text.size() <= 100;
 
       function fileDoc(fileId) {
         return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId);
       }
 
       match /messages/{msgId} {
+        function validReply(d) {
+          return !('replyTo' in d)
+            || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
+                && d.replyTo.text is string && d.replyTo.text.size() <= 120);
+        }
         allow read: if isMember();
-        // 본인 이름으로만 작성, 수정 불가, 본인 메시지만 삭제
+        // 본인 이름으로만 작성 (반응은 처음부터 넣을 수 없음)
         allow create: if isMember()
           && request.resource.data.uid == request.auth.uid
+          && !('reactions' in request.resource.data)
+          && validReply(request.resource.data)
           && (
             (request.resource.data.type == 'text'
               && request.resource.data.text is string
+              && request.resource.data.text.size() > 0
               && request.resource.data.text.size() <= 2000)
             ||
             (request.resource.data.type == 'file'
               && getAfter(fileDoc(request.resource.data.file.id)).data.uid == request.auth.uid)
           );
+        // 반응: 누구나 '자기 반응 하나'만 추가/변경/취소 가능. 메시지 내용은 수정 불가
+        allow update: if isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+          && request.resource.data.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
+          && (!(request.auth.uid in request.resource.data.reactions)
+              || request.resource.data.reactions[request.auth.uid] in ['👍', '❤️', '😂', '😮', '😢', '🎉']);
+        // 삭제: 본인 메시지만
         allow delete: if isMember() && resource.data.uid == request.auth.uid;
       }
 
