@@ -5,7 +5,7 @@
 const V = "10.12.2";
 const { initializeApp } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`);
 const {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+  getAuth, GoogleAuthProvider, signInWithPopup, reauthenticateWithPopup, signOut, onAuthStateChanged,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`);
 const {
   getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, limit, startAfter, where,
@@ -17,6 +17,41 @@ const CHUNK_SIZE = 900 * 1024;
 // 무료 한도(하루 읽기 5만 회)를 아끼기 위해 한 번에 불러오는 개수 제한
 export const PAGE_SIZE = 50;
 const FILE_LIST_LIMIT = 30;
+
+const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+let gmailToken = null, gmailTokenExp = 0;
+
+// 한글이 들어간 메일을 Gmail API 형식(base64url로 인코딩한 MIME)으로 만들기
+function b64utf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function buildMime({ to, subject, text, html }) {
+  const boundary = "b_" + Math.random().toString(36).slice(2);
+  const wrap = (b64) => b64.replace(/.{1,76}/g, "$&\r\n");
+  const msg = [
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${b64utf8(subject)}?=`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap(b64utf8(text)),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap(b64utf8(html)),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+  return btoa(msg).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 
 export function createFirebaseBackend(config, { allowedDomain }) {
   const app = initializeApp(config);
@@ -181,7 +216,9 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     },
     listenInvites(cb) {
       return onSnapshot(collection(db, "invites"), (snap) => {
-        cb(new Map(snap.docs.map((d) => [d.id, { ...d.data(), at: d.data().at?.toDate?.() ?? null }])));
+        cb(new Map(snap.docs.map((d) => [d.id, {
+          ...d.data(), at: d.data().at?.toDate?.() ?? null, mailedAt: d.data().mailedAt?.toDate?.() ?? null,
+        }])));
       }, console.warn);
     },
     async invite(emails) {
@@ -192,6 +229,41 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       }
     },
     uninvite(email) { return deleteDoc(doc(db, "invites", email.toLowerCase())); },
+    markMailed(email) { return setDoc(doc(db, "invites", email.toLowerCase()), { mailedAt: serverTimestamp() }, { merge: true }); },
+
+    // ----- Gmail로 초대 메일 보내기 (관리자 전용) -----
+    // 관리자에게 'Gmail로 메일 보내기' 권한을 받아서(구글 로그인 창), 관리자 Gmail 계정으로 직접 발송.
+    // 권한(토큰)은 이 창의 메모리에만 1시간 가까이 보관하고 어디에도 저장하지 않음.
+    async getGmailToken() {
+      if (gmailToken && Date.now() < gmailTokenExp) return gmailToken;
+      const p = new GoogleAuthProvider();
+      p.addScope(GMAIL_SEND_SCOPE);
+      p.setCustomParameters({ login_hint: auth.currentUser.email });
+      const res = await reauthenticateWithPopup(auth.currentUser, p);
+      const token = GoogleAuthProvider.credentialFromResult(res)?.accessToken;
+      if (!token) throw Object.assign(new Error("Gmail 권한을 받지 못했어요"), { code: "gmail/no-token" });
+      gmailToken = token;
+      gmailTokenExp = Date.now() + 50 * 60 * 1000;
+      return token;
+    },
+    hasGmailToken() { return !!gmailToken && Date.now() < gmailTokenExp; },
+    async sendGmail({ to, subject, text, html }) {
+      const token = await this.getGmailToken();
+      const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ raw: buildMime({ to, subject, text, html }) }),
+      });
+      if (res.ok) return;
+      const body = await res.json().catch(() => ({}));
+      const reason = body?.error?.errors?.[0]?.reason || body?.error?.details?.[0]?.reason || body?.error?.status || "";
+      const msg = body?.error?.message || `HTTP ${res.status}`;
+      if (res.status === 401) { gmailToken = null; }
+      let code = "gmail/failed";
+      if (/accessNotConfigured|SERVICE_DISABLED/i.test(reason + msg)) code = "gmail/api-disabled";
+      else if (/insufficient|SCOPE/i.test(reason + msg)) { code = "gmail/no-permission"; gmailToken = null; }
+      throw Object.assign(new Error(msg), { code });
+    },
 
     // ----- 프로필 -----
     listenUsers(cb) {

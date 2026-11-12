@@ -821,10 +821,76 @@ function inviteText(email) {
     + `2) 'Google 계정으로 로그인'을 누르고, 꼭 이 계정으로 로그인하세요: ${email}\n\n`
     + `3) '📲 앱으로 설치하기'를 누르면 휴대폰·컴퓨터에 앱처럼 설치할 수 있어요.`;
 }
-function mailInvite(email) {
-  const url = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`[${SITE_TITLE}] 초대장이 도착했어요`)}&body=${encodeURIComponent(inviteText(email))}`;
-  location.href = url;
+const inviteSubject = () => `[${SITE_TITLE}] 초대장이 도착했어요 💌`;
+const escHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function inviteHtml(email) {
+  const url = siteUrl();
+  const from = escHtml(displayName(me.uid, me.name));
+  return `<div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1c2333">
+  <div style="font-size:44px;text-align:center">💬</div>
+  <h2 style="text-align:center;margin:8px 0 4px">${escHtml(SITE_TITLE)}에 초대합니다!</h2>
+  <p style="text-align:center;color:#6b7489;margin:0 0 24px">${from} 님이 초대했어요</p>
+  <p style="text-align:center;margin:0 0 24px">
+    <a href="${url}" style="display:inline-block;background:#3b6cf6;color:#fff;text-decoration:none;font-weight:bold;padding:14px 28px;border-radius:12px">채팅방 들어가기</a>
+  </p>
+  <ol style="line-height:1.8;padding-left:20px">
+    <li>위 버튼을 누르거나 <a href="${url}">${url}</a> 로 들어가요.</li>
+    <li><b>'Google 계정으로 로그인'</b>을 누르고, 꼭 이 계정으로 로그인해요:<br><b>${escHtml(email)}</b></li>
+    <li><b>'📲 앱으로 설치하기'</b>를 누르면 휴대폰·컴퓨터에 앱처럼 설치할 수 있어요.</li>
+  </ol>
+  <p style="color:#949cb0;font-size:12px;margin-top:24px">초대받은 Gmail 계정으로만 들어올 수 있어요. 잘못 받은 메일이면 무시해 주세요.</p>
+</div>`;
 }
+// Gmail 작성창 열기 (발송 설정이 아직 안 됐을 때 대신 쓰는 방법)
+function openGmailCompose(email) {
+  const url = "https://mail.google.com/mail/?view=cm&fs=1"
+    + `&to=${encodeURIComponent(email)}&su=${encodeURIComponent(inviteSubject())}&body=${encodeURIComponent(inviteText(email))}`;
+  window.open(url, "_blank", "noopener");
+}
+
+// Gmail로 초대 메일 보내기. 처음 한 번은 구글 창에서 '메일 보내기' 권한을 허용해야 함
+async function sendInviteMails(emails) {
+  try {
+    await backend.getGmailToken(); // 클릭 직후에 권한 창을 띄워야 팝업이 막히지 않음
+  } catch (err) {
+    return handleGmailError(err, emails);
+  }
+  let ok = 0;
+  const failed = [];
+  for (const [i, email] of emails.entries()) {
+    toast(`📧 초대 메일 보내는 중… (${i + 1}/${emails.length})`);
+    try {
+      await backend.sendGmail({ to: email, subject: inviteSubject(), text: inviteText(email), html: inviteHtml(email) });
+      await backend.markMailed(email).catch(() => {});
+      ok++;
+    } catch (err) {
+      if (err.code === "gmail/api-disabled" || err.code === "gmail/no-permission") return handleGmailError(err, emails.slice(i));
+      failed.push(email);
+    }
+  }
+  toast(failed.length ? `${ok}명에게 보냈고, ${failed.length}명은 실패했어요: ${failed.join(", ")}` : `📨 ${ok}명에게 초대 메일을 보냈어요!`);
+}
+
+function handleGmailError(err, emails) {
+  const code = err.code || "";
+  if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") return toast("메일 보내기를 취소했어요 (초대는 저장됐어요)");
+  if (code === "auth/popup-blocked") return toast("팝업이 차단됐어요. 주소창 옆에서 팝업을 허용한 뒤 📧 버튼을 다시 눌러 주세요.");
+  if (code === "auth/user-mismatch") return toast(`관리자 계정(${me.email})을 선택해야 해요. 📧 버튼을 다시 눌러 주세요.`);
+  const reasons = {
+    "gmail/api-disabled": "Google Cloud에서 <b>Gmail API</b>가 아직 꺼져 있어요. 아래 ①을 해 주세요.",
+    "gmail/no-permission": "구글 창에서 <b>'이메일 보내기' 체크박스</b>를 체크하지 않았어요. 아래 ③을 확인해 주세요.",
+    "auth/admin-restricted-operation": "구글 권한 설정이 필요해요. 아래 ②를 확인해 주세요.",
+  };
+  $("gmail-reason").innerHTML = reasons[code] || `메일을 보내지 못했어요: ${escHtml(err.message)}<br>아래 설정을 확인해 주세요.`;
+  $("gmail-fallback").onclick = () => { for (const e of emails.slice(0, 5)) openGmailCompose(e); $("gmail-dialog").close(); };
+  $("gmail-dialog").showModal();
+}
+$("gmail-help").onclick = () => { $("gmail-reason").textContent = "처음 한 번만 하면 되는 설정이에요."; $("gmail-fallback").onclick = () => $("gmail-dialog").close(); $("gmail-dialog").showModal(); };
+for (const a of document.querySelectorAll("#gmail-dialog a[data-gcp]")) {
+  a.href = a.dataset.gcp.replace("PROJECT", firebaseConfig.projectId);
+}
+$("invite-send").checked = safeGet("inviteSendMail") !== "off";
+$("invite-send").onchange = () => safeSet("inviteSendMail", $("invite-send").checked ? "on" : "off");
 
 $("invite-form").onsubmit = async (e) => {
   e.preventDefault();
@@ -833,14 +899,20 @@ $("invite-form").onsubmit = async (e) => {
   const bad = emails.filter((x) => !EMAIL_RE.test(x));
   if (!emails.length) return toast("초대할 Gmail 주소를 입력해 주세요");
   if (bad.length) return toast("이메일 형식이 아니에요: " + bad.join(", "));
+  const sendMail = $("invite-send").checked;
+  // 메일도 보낼 거면, 버튼을 누른 바로 그 순간에 Gmail 권한 창부터 띄움 (늦게 띄우면 브라우저가 팝업을 막음)
+  const tokenReady = sendMail && !backend.hasGmailToken() ? backend.getGmailToken().then(() => null, (err) => err) : Promise.resolve(null);
   try {
     await backend.invite(emails);
     $("invite-input").value = "";
     toast(`${emails.length}명을 초대했어요. 이제 그 계정으로 로그인할 수 있어요.`);
-    if (emails.length === 1 && confirm(`${emails[0]}에게 초대 메일도 보낼까요?\n(메일 앱/Gmail이 열려요)`)) mailInvite(emails[0]);
   } catch (err) {
-    toast("초대하지 못했어요: " + err.message);
+    return toast("초대하지 못했어요: " + err.message);
   }
+  if (!sendMail) return;
+  const tokenErr = await tokenReady;
+  if (tokenErr) return handleGmailError(tokenErr, emails);
+  await sendInviteMails(emails);
 };
 $("invite-copy").onclick = async () => {
   const text = inviteText("(초대받은 Gmail 주소)");
@@ -881,11 +953,13 @@ function renderInviteList() {
     else li.append(el("span", "avatar emoji-avatar invite-avatar", "✉️"));
     const info = el("div", "user-info");
     info.append(el("div", "user-name", found ? displayName(found[0], found[1].name) : email));
-    info.append(el("div", "user-email", found ? `${email} · ✅ 가입함` : "⏳ 아직 로그인 안 함"));
+    const mailedAt = invitesMap.get(email)?.mailedAt;
+    const mailed = mailedAt ? ` · 📨 메일 보냄 ${mailedAt.toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" })}` : "";
+    info.append(el("div", "user-email", (found ? `${email} · ✅ 가입함` : "⏳ 아직 로그인 안 함") + mailed));
     li.append(info);
     const mail = el("button", "pill-btn", "📧");
-    mail.title = "초대 메일 보내기";
-    mail.onclick = () => mailInvite(email);
+    mail.title = "Gmail로 초대 메일 보내기";
+    mail.onclick = () => sendInviteMails([email]);
     const del = el("button", "pill-btn danger", "초대 취소");
     del.onclick = async () => {
       if (!confirm(`${email}의 초대를 취소할까요?\n이 계정은 더 이상 채팅방에 들어올 수 없어요.`)) return;

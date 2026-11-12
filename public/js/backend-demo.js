@@ -132,6 +132,10 @@ export function createDemoBackend() {
     listenInvites(cb) { inviteSubs.add(cb); cb(new Map(invites)); return () => inviteSubs.delete(cb); },
     async invite(emails) { for (const e of emails) invites.set(e.toLowerCase(), {}); emitInvites(); },
     async uninvite(email) { invites.delete(email); emitInvites(); },
+    async markMailed(email) { invites.set(email, { ...invites.get(email), mailedAt: new Date() }); emitInvites(); },
+    async getGmailToken() { return "demo"; },
+    hasGmailToken() { return true; },
+    async sendGmail({ to, subject }) { await new Promise((r) => setTimeout(r, 300)); console.log("[데모] 메일 발송:", to, subject); },
 
     listenUsers(cb) { userSubs.add(cb); cb(structuredClone(users)); return () => userSubs.delete(cb); },
     listenMyBan(cb) { cb(false); return () => {}; },
