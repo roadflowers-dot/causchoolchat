@@ -8,7 +8,7 @@ const {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`);
 const {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, limit, startAfter,
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, limit, startAfter, where,
   onSnapshot, serverTimestamp, writeBatch, deleteField, Bytes,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
 
@@ -34,7 +34,9 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     const m = d.data({ serverTimestamps: "estimate" });
     return { id: d.id, ...m, _ts: m.createdAt, createdAt: m.createdAt?.toDate() ?? new Date() };
   };
-  const messagesCol = (roomId) => collection(db, "rooms", roomId, "messages");
+  // 1:1 채팅방(dm_로 시작)은 'dms', 단체방은 'rooms'에 저장
+  const top = (roomId) => (roomId.startsWith("dm_") ? "dms" : "rooms");
+  const messagesCol = (roomId) => collection(db, top(roomId), roomId, "messages");
   const preview = (text) => (text.length > 60 ? text.slice(0, 60) + "…" : text);
 
   // 메시지 저장 + 채팅방 '마지막 메시지' 갱신(목록 미리보기·안 읽음 표시용)을 한 번에
@@ -43,7 +45,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     batch.set(doc(messagesCol(roomId)), {
       ...data, uid: u.uid, name: nameOf(u), photo: u.photoURL, createdAt: serverTimestamp(),
     });
-    batch.update(doc(db, "rooms", roomId), {
+    batch.update(doc(db, top(roomId), roomId), {
       lastMessageAt: serverTimestamp(),
       lastMessage: { uid: u.uid, name: nameOf(u), text: preview(previewText) },
     });
@@ -76,7 +78,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       const q = query(collection(db, "rooms"), orderBy("createdAt"));
       return onSnapshot(q, (snap) => cb(snap.docs.map((d) => {
         const r = d.data({ serverTimestamps: "estimate" });
-        return { id: d.id, ...r, lastMessageAt: r.lastMessageAt?.toDate() ?? null };
+        return { id: d.id, ...r, kind: "group", lastMessageAt: r.lastMessageAt?.toDate() ?? null };
       })), console.warn);
     },
     createRoom(name) {
@@ -96,7 +98,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       return snap.docs.map(toMsg).reverse();
     },
     listenFiles(roomId, cb) {
-      const q = query(collection(db, "rooms", roomId, "files"), orderBy("createdAt", "desc"), limit(FILE_LIST_LIMIT));
+      const q = query(collection(db, top(roomId), roomId, "files"), orderBy("createdAt", "desc"), limit(FILE_LIST_LIMIT));
       return onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
     },
 
@@ -112,7 +114,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       const u = auth.currentUser;
       const bytes = new Uint8Array(await file.arrayBuffer());
       const chunkCount = Math.max(1, Math.ceil(bytes.length / CHUNK_SIZE));
-      const fileRef = doc(collection(db, "rooms", roomId, "files"));
+      const fileRef = doc(collection(db, top(roomId), roomId, "files"));
 
       for (let i = 0; i < chunkCount; i++) {
         await setDoc(doc(fileRef, "chunks", String(i)), {
@@ -134,7 +136,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       const batch = writeBatch(db);
       batch.delete(doc(messagesCol(roomId), msg.id));
       if (msg.type === "file" && msg.file?.id) {
-        const fileRef = doc(db, "rooms", roomId, "files", msg.file.id);
+        const fileRef = doc(db, top(roomId), roomId, "files", msg.file.id);
         const fileSnap = await getDoc(fileRef);
         if (fileSnap.exists()) {
           for (let i = 0; i < fileSnap.data().chunkCount; i++) batch.delete(doc(fileRef, "chunks", String(i)));
@@ -152,6 +154,44 @@ export function createFirebaseBackend(config, { allowedDomain }) {
         [`reactions.${uid}`]: current === emoji ? deleteField() : emoji,
       });
     },
+
+    // ----- 1:1 채팅 -----
+    listenDms(cb) {
+      const q = query(collection(db, "dms"), where("members", "array-contains", auth.currentUser.uid));
+      return onSnapshot(q, (snap) => cb(snap.docs.map((d) => {
+        const r = d.data({ serverTimestamps: "estimate" });
+        return { id: d.id, ...r, kind: "dm", lastMessageAt: r.lastMessageAt?.toDate() ?? null };
+      })), console.warn);
+    },
+    // 상대와의 1:1 채팅방을 열기 (없으면 새로 만듦). 방 이름은 두 사람 uid로 정해져서 중복되지 않음
+    async openDm(otherUid) {
+      const members = [auth.currentUser.uid, otherUid].sort();
+      const id = `dm_${members[0]}_${members[1]}`;
+      const ref = doc(db, "dms", id);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) await setDoc(ref, { members, createdAt: serverTimestamp() });
+      return { id, kind: "dm", members };
+    },
+
+    // ----- 초대 -----
+    // 내가 초대 목록에 있는지 실시간 확인
+    listenMyInvite(cb) {
+      const email = (auth.currentUser.email || "").toLowerCase();
+      return onSnapshot(doc(db, "invites", email), (d) => cb(d.exists()), () => cb(false));
+    },
+    listenInvites(cb) {
+      return onSnapshot(collection(db, "invites"), (snap) => {
+        cb(new Map(snap.docs.map((d) => [d.id, { ...d.data(), at: d.data().at?.toDate?.() ?? null }])));
+      }, console.warn);
+    },
+    async invite(emails) {
+      for (let i = 0; i < emails.length; i += 400) {
+        const batch = writeBatch(db);
+        for (const e of emails.slice(i, i + 400)) batch.set(doc(db, "invites", e.toLowerCase()), { by: auth.currentUser.uid, at: serverTimestamp() });
+        await batch.commit();
+      }
+    },
+    uninvite(email) { return deleteDoc(doc(db, "invites", email.toLowerCase())); },
 
     // ----- 프로필 -----
     listenUsers(cb) {
@@ -199,7 +239,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
 
     // 조각들을 읽어 원래 파일(Blob)로 합치기
     async getFileBlob(roomId, file) {
-      const snap = await getDocs(query(collection(db, "rooms", roomId, "files", file.id, "chunks"), orderBy("i")));
+      const snap = await getDocs(query(collection(db, top(roomId), roomId, "files", file.id, "chunks"), orderBy("i")));
       if (snap.empty) throw new Error("삭제된 파일이에요.");
       return new Blob(snap.docs.map((d) => d.data().data.toUint8Array()), { type: file.contentType });
     },

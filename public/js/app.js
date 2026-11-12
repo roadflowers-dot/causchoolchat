@@ -32,7 +32,11 @@ let loadingOlder = false;
 let replyTo = null;
 let openActionsId = null, pickerId = null;
 let offRooms = null, offMessages = null, offFiles = null;
-let prevLastAt = null;  // 방별 마지막 메시지 시간 (새 메시지 알림 판단용)
+let prevLastAt = {};    // 종류(group/dm)별 → 방별 마지막 메시지 시간 (새 메시지 알림 판단용)
+let groupRooms = [], dmRooms = [];  // 단체방 / 1:1 채팅방
+let invitesMap = new Map();          // (관리자) 초대된 이메일 목록
+let offDms = null, offMyInvite = null, offInvites = null;
+let access = { invited: null, banned: null };
 let firstRenderOfRoom = false;
 let users = {};         // uid -> { nickname, avatar, photo, name, email, admin }
 let bannedSet = new Set();
@@ -48,25 +52,38 @@ backend.onAuth((user, error) => {
   if (error) $("login-error").textContent = error;
 
   $("banned-view").hidden = true;
+  $("uninvited-view").hidden = true;
   if (user) {
     renderMe();
-    prevLastAt = null;
+    prevLastAt = {};
     $("admin-btn").hidden = !isAdmin();
-    // 차단 여부를 먼저 확인한 뒤 채팅 데이터를 불러옴 (관리자가 차단하면 바로 화면이 바뀜)
-    offMyBan = backend.listenMyBan((isBanned) => {
-      const blocked = isBanned && !isAdmin();
-      $("banned-view").hidden = !blocked;
-      $("chat-view").hidden = blocked;
-      if (blocked) stopListening();
-      else if (!offRooms) startListening();
-    });
+    $("chat-view").hidden = true; // 초대·차단 여부를 확인한 뒤에 보여줌
+    // 초대받았는지 + 차단됐는지 확인한 뒤 채팅 데이터를 불러옴 (관리자가 바꾸면 바로 화면이 바뀜)
+    access = { invited: isAdmin() ? true : null, banned: isAdmin() ? false : null };
+    if (isAdmin()) applyAccess();
+    else {
+      offMyInvite = backend.listenMyInvite((invited) => { access.invited = invited; applyAccess(); });
+      offMyBan = backend.listenMyBan((isBanned) => { access.banned = isBanned; applyAccess(); });
+    }
   } else {
-    stopListening(); offMyBan?.(); offMyBan = null;
+    stopListening(); offMyBan?.(); offMyInvite?.(); offMyBan = offMyInvite = null;
     currentRoom = null;
     users = {};
     document.title = SITE_TITLE;
   }
 });
+
+function applyAccess() {
+  if (access.invited === null || access.banned === null) return; // 아직 확인 중
+  const uninvited = !access.invited;
+  const banned = access.invited && access.banned;
+  $("uninvited-view").hidden = !uninvited;
+  $("banned-view").hidden = !banned;
+  $("chat-view").hidden = uninvited || banned;
+  if (uninvited) $("uninvited-email").textContent = me.email;
+  if (uninvited || banned) stopListening();
+  else if (!offRooms) startListening();
+}
 
 function startListening() {
   offUsers = backend.listenUsers((u) => {
@@ -74,18 +91,22 @@ function startListening() {
     backend.setMyName(users[me.uid]?.nickname);
     renderMe();
     renderRooms();
-    if (currentRoom) renderMessages();
-    if ($("admin-dialog").open) renderUserList();
+    if (currentRoom) { renderRoomHeader(); renderMessages(); }
+    if ($("admin-dialog").open) { renderUserList(); renderInviteList(); }
   });
-  offRooms = backend.listenRooms(onRooms);
+  offRooms = backend.listenRooms((list) => onRooms("group", list));
+  offDms = backend.listenDms((list) => onRooms("dm", list));
+  if (isAdmin()) offInvites = backend.listenInvites((map) => { invitesMap = map; if ($("admin-dialog").open) { renderInviteList(); renderUserList(); } });
   if (isAdmin()) offBanned = backend.listenBanned((set) => { bannedSet = set; if ($("admin-dialog").open) renderUserList(); });
 }
 function stopListening() {
-  for (const off of [offRooms, offMessages, offFiles, offUsers, offBanned]) off?.();
-  offRooms = offMessages = offFiles = offUsers = offBanned = null;
+  for (const off of [offRooms, offDms, offMessages, offFiles, offUsers, offBanned, offInvites]) off?.();
+  offRooms = offDms = offMessages = offFiles = offUsers = offBanned = offInvites = null;
+  groupRooms = []; dmRooms = []; rooms = [];
   currentRoom = null;
 }
 $("banned-logout").onclick = () => backend.signOut();
+$("uninvited-logout").onclick = () => backend.signOut();
 
 $("login-btn").onclick = () => backend.signIn().catch((e) => {
   if (e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request") return;
@@ -97,16 +118,20 @@ $("login-btn").onclick = () => backend.signIn().catch((e) => {
 $("logout-btn").onclick = () => confirm("로그아웃할까요?") && backend.signOut();
 
 // ---------- 채팅방 목록 ----------
-function onRooms(list) {
-  rooms = list;
-  notifyNewMessages(list);
+function onRooms(kind, list) {
+  if (kind === "dm") dmRooms = list.sort((a, b) => (b.lastMessageAt?.getTime() ?? 0) - (a.lastMessageAt?.getTime() ?? 0));
+  else groupRooms = list;
+  rooms = [...groupRooms, ...dmRooms];
+  notifyNewMessages(kind, list);
   if (!currentRoom && rooms.length) {
     const saved = safeGet("lastRoom");
     openRoom(rooms.find((r) => r.id === saved) || rooms[0]);
   } else {
     if (currentRoom) {
       const updated = rooms.find((r) => r.id === currentRoom.id);
-      if (!updated) { // 관리자가 방을 삭제함
+      if (!updated && currentRoom.kind === "dm") {
+        // 방금 만든 1:1 채팅이 아직 목록에 안 들어온 경우 → 그대로 둠
+      } else if (!updated) { // 관리자가 방을 삭제함
         currentRoom = null;
         offMessages?.(); offFiles?.();
         if (rooms.length) return openRoom(rooms[0]);
@@ -115,8 +140,7 @@ function onRooms(list) {
         $("notice").hidden = true;
       } else {
         currentRoom = updated;
-        $("room-title").textContent = updated.name;
-        renderNotice();
+        renderRoomHeader();
       }
     }
     renderRooms();
@@ -127,26 +151,46 @@ function onRooms(list) {
 function renderRooms() {
   const list = $("room-list");
   list.innerHTML = "";
-  if (!rooms.length) list.innerHTML = `<li class="empty" style="cursor:default">아직 채팅방이 없어요.<br>＋ 버튼으로 만들어 보세요!</li>`;
-  for (const room of rooms) {
+  const section = (title, btnText, btnTitle, onBtn) => {
+    const li = el("li", "section-title");
+    li.append(el("span", null, title));
+    if (btnText) { const b = el("button", "section-btn", btnText); b.title = btnTitle; b.onclick = onBtn; li.append(b); }
+    list.append(li);
+  };
+  const roomItem = (room) => {
     const unread = isUnread(room);
-    const li = el("li", (room.id === currentRoom?.id ? "active " : "") + (unread ? "unread" : ""));
+    const li = el("li", "room-item " + (room.id === currentRoom?.id ? "active " : "") + (unread ? "unread" : ""));
     li.append(roomIcon(room));
     const text = el("div", "room-text");
-    text.append(el("div", "room-name", room.name));
+    text.append(el("div", "room-name", roomName(room)));
     const lm = room.lastMessage;
-    text.append(el("div", "room-preview", lm ? `${lm.uid === me?.uid ? "나" : displayName(lm.uid, lm.name)}: ${lm.text}` : "새 채팅방"));
+    text.append(el("div", "room-preview", lm ? `${lm.uid === me?.uid ? "나" : displayName(lm.uid, lm.name)}: ${lm.text}` : room.kind === "dm" ? "1:1 채팅" : "새 채팅방"));
     li.append(text);
     if (unread) li.append(el("span", "unread-dot"));
     li.onclick = () => openRoom(room);
     list.append(li);
-  }
+  };
+  section("채팅방");
+  if (!groupRooms.length) list.append(Object.assign(el("li", "empty"), { innerHTML: "아직 채팅방이 없어요.<br>＋ 버튼으로 만들어 보세요!" }));
+  groupRooms.forEach(roomItem);
+  section("1:1 채팅", "＋", "새 1:1 채팅", openDmPicker);
+  if (!dmRooms.length) list.append(Object.assign(el("li", "empty small"), { innerHTML: "친구 프로필 사진을 누르거나<br>＋ 버튼으로 1:1 채팅을 시작해요" }));
+  dmRooms.forEach(roomItem);
   const unreadCount = rooms.filter(isUnread).length;
   document.title = unreadCount ? `(${unreadCount}) ${SITE_TITLE}` : SITE_TITLE;
   $("menu-dot").hidden = !rooms.some((r) => r.id !== currentRoom?.id && isUnread(r));
 }
 
+// 1:1 채팅의 상대방 / 방 이름
+function dmOther(room) { return room.members?.find((u) => u !== me?.uid) ?? me?.uid; }
+function roomName(room) { return room.kind === "dm" ? displayName(dmOther(room)) : room.name; }
+
 function roomIcon(room) {
+  if (room.kind === "dm") {
+    const a = avatarEl(dmOther(room));
+    a.classList.add("room-icon", "dm-icon");
+    return a;
+  }
   const icon = el("span", "room-icon", Array.from(room.name.trim())[0] || "#");
   let h = 0;
   for (const ch of room.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -165,10 +209,7 @@ function openRoom(room) {
   if (currentRoom?.id !== room.id) clearReply();
   currentRoom = room;
   safeSet("lastRoom", room.id);
-  $("room-title").textContent = room.name;
-  $("room-icon").replaceWith(Object.assign(roomIcon(room), { id: "room-icon" }));
-  $("room-menu-btn").hidden = !isAdmin();
-  renderNotice();
+  renderRoomHeader();
   closeSidebar();
   setComposerEnabled(true);
 
@@ -189,6 +230,55 @@ function openRoom(room) {
   offFiles = backend.listenFiles(room.id, renderFiles);
   if (!matchMedia("(pointer: coarse)").matches) $("message-input").focus();
 }
+
+function renderRoomHeader() {
+  const room = currentRoom;
+  if (!room) return;
+  $("room-title").textContent = roomName(room);
+  $("room-icon").replaceWith(Object.assign(roomIcon(room), { id: "room-icon" }));
+  $("room-menu-btn").hidden = !isAdmin() || room.kind === "dm";
+  renderNotice();
+}
+
+// ---------- 1:1 채팅 시작 ----------
+async function startDm(uid) {
+  if (!uid || uid === me?.uid) return;
+  try {
+    const dm = await backend.openDm(uid);
+    $("dm-dialog").close();
+    openRoom(rooms.find((r) => r.id === dm.id) || dm);
+  } catch (e) {
+    toast("1:1 채팅을 열지 못했어요: " + e.message);
+  }
+}
+function openDmPicker() {
+  $("dm-search").value = "";
+  renderDmPicker();
+  $("dm-dialog").showModal();
+}
+function renderDmPicker() {
+  const q = $("dm-search").value.trim().toLowerCase();
+  const ul = $("dm-user-list");
+  ul.replaceChildren();
+  const list = Object.entries(users)
+    .filter(([uid]) => uid !== me.uid)
+    .map(([uid, u]) => ({ uid, ...u, display: displayName(uid, u.name) }))
+    .filter((u) => !q || u.display.toLowerCase().includes(q) || (u.name || "").toLowerCase().includes(q))
+    .sort((a, b) => a.display.localeCompare(b.display, "ko"));
+  if (!list.length) ul.append(el("li", "empty", q ? "찾는 친구가 없어요" : "아직 다른 친구가 없어요"));
+  for (const u of list) {
+    const li = el("li", "pick");
+    li.append(avatarEl(u.uid, u.name, u.photo));
+    const info = el("div", "user-info");
+    const nameLine = el("div", "user-name", u.display);
+    if (u.admin) nameLine.append(el("span", "admin-badge", "관리자"));
+    info.append(nameLine);
+    li.append(info, el("span", "pick-go", "💬"));
+    li.onclick = () => startDm(u.uid);
+    ul.append(li);
+  }
+}
+$("dm-search").oninput = renderDmPicker;
 
 // ---------- 안 읽은 메시지 (이 기기 기준) ----------
 const readKey = (roomId) => `lastRead:${me?.uid}:${roomId}`;
@@ -284,7 +374,15 @@ function messageEl(m, grouped) {
   const wrap = el("div", "msg" + (mine ? " mine" : "") + (grouped ? " grouped" : "") + (openActionsId === m.id ? " show-actions" : ""));
   wrap.dataset.id = m.id;
 
-  if (!mine) wrap.append(avatarEl(m.uid, m.name, m.photo));
+  if (!mine) {
+    const av = avatarEl(m.uid, m.name, m.photo);
+    if (currentRoom?.kind !== "dm") { // 단체방에서 친구 사진을 누르면 1:1 채팅
+      av.classList.add("clickable");
+      av.title = `${displayName(m.uid, m.name)}님과 1:1 채팅`;
+      av.onclick = () => startDm(m.uid);
+    }
+    wrap.append(av);
+  }
 
   const body = el("div", "body");
   if (!grouped) {
@@ -578,10 +676,10 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-function notifyNewMessages(list) {
-  const first = prevLastAt === null;
-  const prev = prevLastAt || new Map();
-  prevLastAt = new Map(list.map((r) => [r.id, r.lastMessageAt?.getTime() ?? 0]));
+function notifyNewMessages(kind, list) {
+  const first = !prevLastAt[kind];
+  const prev = prevLastAt[kind] || new Map();
+  prevLastAt[kind] = new Map(list.map((r) => [r.id, r.lastMessageAt?.getTime() ?? 0]));
   if (first) return;
   for (const room of list) {
     const at = room.lastMessageAt?.getTime() ?? 0;
@@ -590,7 +688,7 @@ function notifyNewMessages(list) {
     const viewing = room.id === currentRoom?.id && !document.hidden;
     if (viewing) continue;
     const who = displayName(lm.uid, lm.name);
-    if (!document.hidden) toast(`💬 ${room.name} · ${who}: ${lm.text}`, () => openRoom(room));
+    if (!document.hidden) toast(room.kind === "dm" ? `💌 ${who}: ${lm.text}` : `💬 ${room.name} · ${who}: ${lm.text}`, () => openRoom(room));
     else if (notifyOn()) showNotification(room, `${who}: ${lm.text}`);
   }
 }
@@ -598,8 +696,9 @@ function notifyNewMessages(list) {
 function showNotification(room, body) {
   const options = { body, tag: room.id, renotify: true, data: { roomId: room.id } };
   try {
-    if (swReg) return swReg.showNotification(room.name, options);
-    const n = new Notification(room.name, options);
+    const title = room.kind === "dm" ? `💌 ${roomName(room)}` : room.name;
+    if (swReg) return swReg.showNotification(title, options);
+    const n = new Notification(title, options);
     n.onclick = () => { window.focus(); openRoom(room); n.close(); };
   } catch {}
 }
@@ -700,7 +799,103 @@ function resizeImage(file, size) {
 }
 
 // ---------- 관리자 ----------
-$("admin-btn").onclick = () => { $("user-search").value = ""; renderUserList(); $("admin-dialog").showModal(); };
+$("admin-btn").onclick = () => {
+  $("user-search").value = "";
+  showAdminTab("invite");
+  renderInviteList(); renderUserList();
+  $("admin-dialog").showModal();
+};
+function showAdminTab(tab) {
+  for (const b of document.querySelectorAll(".tab-btn")) b.classList.toggle("active", b.dataset.tab === tab);
+  $("tab-invite").hidden = tab !== "invite";
+  $("tab-users").hidden = tab !== "users";
+}
+for (const b of document.querySelectorAll(".tab-btn")) b.onclick = () => showAdminTab(b.dataset.tab);
+
+// ----- Gmail 초대 -----
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const siteUrl = () => location.origin + "/";
+function inviteText(email) {
+  return `안녕하세요! '${SITE_TITLE}'에 초대합니다 💬\n\n`
+    + `1) 아래 주소로 들어가세요\n${siteUrl()}\n\n`
+    + `2) 'Google 계정으로 로그인'을 누르고, 꼭 이 계정으로 로그인하세요: ${email}\n\n`
+    + `3) '📲 앱으로 설치하기'를 누르면 휴대폰·컴퓨터에 앱처럼 설치할 수 있어요.`;
+}
+function mailInvite(email) {
+  const url = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`[${SITE_TITLE}] 초대장이 도착했어요`)}&body=${encodeURIComponent(inviteText(email))}`;
+  location.href = url;
+}
+
+$("invite-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const raw = $("invite-input").value;
+  const emails = [...new Set(raw.split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))];
+  const bad = emails.filter((x) => !EMAIL_RE.test(x));
+  if (!emails.length) return toast("초대할 Gmail 주소를 입력해 주세요");
+  if (bad.length) return toast("이메일 형식이 아니에요: " + bad.join(", "));
+  try {
+    await backend.invite(emails);
+    $("invite-input").value = "";
+    toast(`${emails.length}명을 초대했어요. 이제 그 계정으로 로그인할 수 있어요.`);
+    if (emails.length === 1 && confirm(`${emails[0]}에게 초대 메일도 보낼까요?\n(메일 앱/Gmail이 열려요)`)) mailInvite(emails[0]);
+  } catch (err) {
+    toast("초대하지 못했어요: " + err.message);
+  }
+};
+$("invite-copy").onclick = async () => {
+  const text = inviteText("(초대받은 Gmail 주소)");
+  try { await navigator.clipboard.writeText(text); toast("초대 문구를 복사했어요. 카톡·문자에 붙여넣으세요."); }
+  catch { prompt("아래 문구를 복사하세요", text); }
+};
+$("invite-all").onclick = async () => {
+  const missing = uninvitedUsers();
+  if (!missing.length) return;
+  if (!confirm(`지금까지 이 사이트를 쓴 ${missing.length}명을 초대 목록에 추가할까요?`)) return;
+  try { await backend.invite(missing.map((u) => u.email)); toast(`${missing.length}명을 초대 목록에 추가했어요`); }
+  catch (err) { toast("실패했어요: " + err.message); }
+};
+
+// 이미 사이트를 쓰고 있지만 초대 목록에 없는 사람 (초대 기능을 켜기 전에 가입한 사람)
+function uninvitedUsers() {
+  return Object.entries(users)
+    .filter(([uid, u]) => !u.admin && u.email && !invitesMap.has(u.email.toLowerCase()))
+    .map(([uid, u]) => ({ uid, ...u }));
+}
+function userByEmail(email) {
+  return Object.entries(users).find(([, u]) => (u.email || "").toLowerCase() === email);
+}
+
+function renderInviteList() {
+  const missing = uninvitedUsers();
+  $("invite-migrate").hidden = !missing.length;
+  $("invite-migrate-count").textContent = missing.length;
+  const ul = $("invite-list");
+  ul.replaceChildren();
+  const emails = [...invitesMap.keys()].sort();
+  $("invite-count").textContent = emails.length;
+  if (!emails.length) ul.append(el("li", "empty", "아직 초대한 사람이 없어요"));
+  for (const email of emails) {
+    const li = el("li");
+    const found = userByEmail(email);
+    if (found) li.append(avatarEl(found[0], found[1].name, found[1].photo));
+    else li.append(el("span", "avatar emoji-avatar invite-avatar", "✉️"));
+    const info = el("div", "user-info");
+    info.append(el("div", "user-name", found ? displayName(found[0], found[1].name) : email));
+    info.append(el("div", "user-email", found ? `${email} · ✅ 가입함` : "⏳ 아직 로그인 안 함"));
+    li.append(info);
+    const mail = el("button", "pill-btn", "📧");
+    mail.title = "초대 메일 보내기";
+    mail.onclick = () => mailInvite(email);
+    const del = el("button", "pill-btn danger", "초대 취소");
+    del.onclick = async () => {
+      if (!confirm(`${email}의 초대를 취소할까요?\n이 계정은 더 이상 채팅방에 들어올 수 없어요.`)) return;
+      try { await backend.uninvite(email); toast("초대를 취소했어요"); } catch (err) { toast("실패했어요: " + err.message); }
+    };
+    li.append(mail, del);
+    ul.append(li);
+  }
+}
+
 $("user-search").oninput = renderUserList;
 
 function renderUserList() {
@@ -721,8 +916,15 @@ function renderUserList() {
     if (u.nickname && u.name && u.nickname !== u.name) nameLine.append(el("span", "user-real", ` (${u.name})`));
     if (u.admin) nameLine.append(el("span", "admin-badge", "관리자"));
     if (banned) nameLine.append(el("span", "banned-badge", "차단됨"));
+    const notInvited = !u.admin && u.email && !invitesMap.has(u.email.toLowerCase());
+    if (notInvited) nameLine.append(el("span", "banned-badge", "초대 안 됨"));
     info.append(nameLine, el("div", "user-email", u.email || ""));
     li.append(info);
+    if (notInvited) {
+      const inv = el("button", "pill-btn", "초대");
+      inv.onclick = async () => { try { await backend.invite([u.email]); toast("초대했어요"); } catch (e) { toast("실패했어요: " + e.message); } };
+      li.append(inv);
+    }
     if (u.uid !== me.uid && !u.admin) {
       const b = el("button", banned ? "pill-btn" : "pill-btn danger", banned ? "차단 해제" : "차단");
       b.onclick = async () => {
@@ -737,7 +939,7 @@ function renderUserList() {
 }
 
 function renderNotice() {
-  const text = currentRoom?.notice?.text;
+  const text = currentRoom?.kind === "dm" ? "" : currentRoom?.notice?.text;
   $("notice").hidden = !text;
   $("notice-text").textContent = text || "";
 }

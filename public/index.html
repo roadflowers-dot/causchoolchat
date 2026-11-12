@@ -41,6 +41,16 @@
     </div>
   </section>
 
+  <!-- 초대받지 않은 계정 화면 -->
+  <section id="uninvited-view" class="login-view" hidden>
+    <div class="login-card">
+      <div class="logo">🔒</div>
+      <h1>초대받은 사람만<br />들어올 수 있어요</h1>
+      <p>지금 로그인한 계정 <b id="uninvited-email"></b> 은(는) 초대 목록에 없어요.<br />관리자에게 이 Gmail 주소로 초대해 달라고 말해 주세요.</p>
+      <button id="uninvited-logout" class="google-btn">다른 계정으로 로그인</button>
+    </div>
+  </section>
+
   <!-- 차단된 사용자 화면 -->
   <section id="banned-view" class="login-view" hidden>
     <div class="login-card">
@@ -159,15 +169,55 @@
   <dialog id="admin-dialog" class="dialog wide">
     <div class="dialog-body">
       <h3>👑 관리자 메뉴</h3>
-      <p class="hint">
-        • 모든 메시지 삭제: 메시지에 마우스를 올리거나 눌러서 🗑<br />
-        • 공지·방 이름·방 삭제: 채팅방 위쪽 <b>⋯</b> 버튼<br />
-        • 사용자 차단: 아래 목록 (차단하면 채팅방을 보거나 쓸 수 없어요)
-      </p>
-      <input id="user-search" class="search" placeholder="이름이나 이메일로 찾기" autocomplete="off" />
-      <ul id="user-list" class="user-list"></ul>
+      <div class="tabs">
+        <button type="button" class="tab-btn active" data-tab="invite">✉️ 초대 관리</button>
+        <button type="button" class="tab-btn" data-tab="users">👥 사용자 관리</button>
+      </div>
+
+      <!-- 초대 관리 -->
+      <div id="tab-invite" class="tab-panel">
+        <p class="hint">🔒 <b>초대한 Gmail 계정만</b> 채팅방에 들어올 수 있어요. 초대받지 않은 사람은 로그인해도 아무것도 볼 수 없어요.</p>
+        <div id="invite-migrate" class="migrate-box" hidden>
+          ⚠️ 지금까지 사이트를 쓴 사람 중 <b id="invite-migrate-count">0</b>명이 초대 목록에 없어서 들어올 수 없어요.
+          <button type="button" id="invite-all" class="primary-btn">모두 초대하기</button>
+        </div>
+        <form id="invite-form" class="invite-form">
+          <textarea id="invite-input" rows="2" placeholder="친구@gmail.com&#10;여러 명은 쉼표나 줄바꿈으로 구분해요" autocomplete="off"></textarea>
+          <button type="submit" class="primary-btn">초대하기</button>
+        </form>
+        <div class="invite-tools">
+          <span class="hint">초대한 사람 <b id="invite-count">0</b>명</span>
+          <button type="button" id="invite-copy" class="pill-btn">📋 초대 문구 복사</button>
+        </div>
+        <ul id="invite-list" class="user-list"></ul>
+      </div>
+
+      <!-- 사용자 관리 -->
+      <div id="tab-users" class="tab-panel" hidden>
+        <p class="hint">
+          • 모든 메시지 삭제: 메시지에 마우스를 올리거나 눌러서 🗑<br />
+          • 공지·방 이름·방 삭제: 채팅방 위쪽 <b>⋯</b> 버튼<br />
+          • 차단하면 채팅방을 보거나 쓸 수 없어요
+        </p>
+        <input id="user-search" class="search" placeholder="이름이나 이메일로 찾기" autocomplete="off" />
+        <ul id="user-list" class="user-list"></ul>
+      </div>
+
       <div class="dialog-actions">
         <button type="button" class="primary-btn" data-close>닫기</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- 1:1 채팅 상대 고르기 -->
+  <dialog id="dm-dialog" class="dialog">
+    <div class="dialog-body">
+      <h3>💌 1:1 채팅할 친구 고르기</h3>
+      <input id="dm-search" class="search" placeholder="친구 이름 찾기" autocomplete="off" />
+      <ul id="dm-user-list" class="user-list"></ul>
+      <p class="hint">1:1 채팅은 두 사람만 볼 수 있어요.</p>
+      <div class="dialog-actions">
+        <button type="button" class="text-btn" data-close>닫기</button>
       </div>
     </div>
   </dialog>

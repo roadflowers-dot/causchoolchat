@@ -17,6 +17,11 @@
 - **앱 설치 (PWA)**: 📲 앱으로 설치하기 버튼 → 홈 화면·바탕화면에 아이콘, 전체 화면으로 실행
 - **관리자 모드** (관리자 이메일로 로그인하면 자동): 👑 사용자 차단/해제, 모든 메시지 삭제,
   ⋯ 메뉴로 공지 고정·방 이름 변경·방 삭제. 관리자 이메일은 `firestore.rules`의 `isAdmin()`에서 바꿔요.
+- **초대 전용**: 관리자가 👑 → ✉️ 초대 관리에서 초대한 Gmail 계정만 들어올 수 있어요.
+  초대받지 않은 계정은 로그인해도 🔒 화면만 보이고, 보안 규칙에서도 모든 읽기/쓰기가 막혀요.
+  📧 버튼으로 초대 메일 보내기, 📋 초대 문구 복사 가능.
+- **1:1 채팅**: 방 목록의 "1:1 채팅 ＋" 또는 단체방에서 친구 프로필 사진을 누르면 시작.
+  두 사람만 볼 수 있어요 (관리자도 볼 수 없음). `dms/dm_{uid1}_{uid2}`에 저장.
 - 주소 끝에 `?demo`를 붙이면 실제 데이터에 영향 없는 연습 화면
 
 ## 구성
@@ -64,6 +69,8 @@ firestore.rules            DB 보안 규칙
 users/{uid}                          name, email, photo, lastSeen
 users/{uid}                          name, email, photo, nickname, avatar("emoji:🐶" | data:image/jpeg...), admin
 banned/{uid}                         by, at   (관리자만 추가/삭제)
+invites/{소문자 이메일}               by, at   (관리자만 추가/삭제)
+dms/dm_{작은uid}_{큰uid}              members[2], createdAt, lastMessageAt, lastMessage  (+ messages, files 하위 구조는 rooms와 같음)
 rooms/{roomId}                       name, createdBy, createdAt, lastMessageAt, lastMessage{uid,name,text}, notice{text}
 rooms/{roomId}/messages/{msgId}      type("text"|"file"), text, file{id,name,size,contentType},
                                      replyTo{id,name,text}, reactions{uid: 이모지},

@@ -11,10 +11,16 @@ service cloud.firestore {
         && request.auth.token.email in ['roadflowers@gmail.com'];
     }
 
-    // 로그인했고, 관리자에게 차단되지 않은 사용자
+    function myEmail() { return request.auth.token.email.lower(); }
+
+    // 들어올 수 있는 사람: 관리자, 또는 '관리자가 초대한 Gmail'로 로그인했고 차단되지 않은 사용자
+    // (초대 목록에 없는 외부 사람은 아무것도 읽거나 쓸 수 없음)
     function isMember() {
       return request.auth != null
-        && (isAdmin() || !exists(/databases/$(database)/documents/banned/$(request.auth.uid)));
+        && (isAdmin() || (
+          request.auth.token.email_verified == true
+          && exists(/databases/$(database)/documents/invites/$(myEmail()))
+          && !exists(/databases/$(database)/documents/banned/$(request.auth.uid))));
     }
 
     // 파일 크기 제한: 5MB (= 900KB 조각 최대 6개). firebase-config.js의 MAX_FILE_MB와 맞추세요.
@@ -25,6 +31,15 @@ service cloud.firestore {
     // 관리자 확인용 (관리자만 읽을 수 있음 → 앱이 관리자 모드를 켤지 판단)
     match /admin/{doc} {
       allow read: if isAdmin();
+    }
+
+    // 초대 목록 (문서 이름 = 소문자 이메일). 관리자만 추가/삭제. 본인은 자기가 초대됐는지 확인 가능
+    match /invites/{email} {
+      allow get: if request.auth != null && (myEmail() == email || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && email == email.lower()
+        && email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$');
+      allow delete: if isAdmin();
     }
 
     // 차단 목록: 관리자만 추가/해제. 본인은 자기가 차단됐는지 확인 가능
@@ -130,6 +145,93 @@ service cloud.firestore {
             && request.resource.data.data is bytes
             && request.resource.data.data.size() <= chunkBytes();
           allow delete: if isMember() && (resource.data.uid == request.auth.uid || isAdmin());
+        }
+      }
+    }
+    // ===== 1:1 채팅 =====
+    // 문서 이름: dm_{작은uid}_{큰uid}  → 이름만 봐도 두 사람이 누군지 알 수 있음
+    // 두 사람만 읽고 쓸 수 있음 (관리자도 볼 수 없음)
+    match /dms/{dmId} {
+      function dmParts() { return dmId.split('_'); }
+      function inDm() {
+        return isMember() && dmParts().size() == 3 && dmParts()[0] == 'dm'
+          && (request.auth.uid == dmParts()[1] || request.auth.uid == dmParts()[2]);
+      }
+      allow get: if inDm();
+      allow list: if isMember() && request.auth.uid in resource.data.members;
+      allow create: if inDm()
+        && dmParts()[1] < dmParts()[2]
+        && request.resource.data.members == [dmParts()[1], dmParts()[2]]
+        && exists(/databases/$(database)/documents/users/$(dmParts()[1]))
+        && exists(/databases/$(database)/documents/users/$(dmParts()[2]))
+        && request.resource.data.keys().hasOnly(['members', 'createdAt']);
+      allow update: if inDm()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageAt', 'lastMessage'])
+        && request.resource.data.lastMessageAt == request.time
+        && request.resource.data.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
+        && request.resource.data.lastMessage.uid == request.auth.uid
+        && request.resource.data.lastMessage.text is string
+        && request.resource.data.lastMessage.text.size() <= 100;
+
+      function dmFileDoc(fileId) {
+        return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId);
+      }
+
+      match /messages/{msgId} {
+        function validReply(d) {
+          return !('replyTo' in d)
+            || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
+                && d.replyTo.text is string && d.replyTo.text.size() <= 120);
+        }
+        allow read: if inDm();
+        allow create: if inDm()
+          && request.resource.data.uid == request.auth.uid
+          && !('reactions' in request.resource.data)
+          && validReply(request.resource.data)
+          && (
+            (request.resource.data.type == 'text'
+              && request.resource.data.text is string
+              && request.resource.data.text.size() > 0
+              && request.resource.data.text.size() <= 2000)
+            ||
+            (request.resource.data.type == 'file'
+              && getAfter(dmFileDoc(request.resource.data.file.id)).data.uid == request.auth.uid)
+          );
+        allow update: if inDm()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+          && request.resource.data.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
+          && (!(request.auth.uid in request.resource.data.reactions)
+              || request.resource.data.reactions[request.auth.uid] in ['👍', '❤️', '😂', '😮', '😢', '🎉']);
+        allow delete: if inDm() && resource.data.uid == request.auth.uid;
+      }
+
+      match /files/{fileId} {
+        function dmChunk(i) {
+          return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId)/chunks/$(string(i));
+        }
+        allow read: if inDm();
+        allow create: if inDm()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 200
+          && request.resource.data.size is int
+          && request.resource.data.size <= maxFileBytes()
+          && request.resource.data.chunkCount is int
+          && request.resource.data.chunkCount >= 1
+          && request.resource.data.chunkCount <= maxChunks()
+          && get(dmChunk(0)).data.uid == request.auth.uid
+          && get(dmChunk(request.resource.data.chunkCount - 1)).data.uid == request.auth.uid;
+        allow delete: if inDm() && resource.data.uid == request.auth.uid;
+
+        match /chunks/{chunkId} {
+          allow read: if inDm();
+          allow create: if inDm()
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.i == int(chunkId)
+            && request.resource.data.i < maxChunks()
+            && request.resource.data.data is bytes
+            && request.resource.data.data.size() <= chunkBytes();
+          allow delete: if inDm() && resource.data.uid == request.auth.uid;
         }
       }
     }

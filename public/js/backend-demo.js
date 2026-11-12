@@ -2,7 +2,9 @@
 // 주소 끝에 ?demo 를 붙이면 언제든 데모 모드로 볼 수 있어요.
 export function createDemoBackend() {
   const PAGE_SIZE = 10;
-  const me = { uid: "me", name: "김학생", email: "student@example.com", photo: "", isAdmin: true }; // 데모에서는 관리자 화면도 확인 가능
+  // 데모에서는 관리자 화면도 확인 가능. ?demo&guest 로 열면 '초대받지 않은 사람' 화면을 볼 수 있음
+  const guest = new URLSearchParams(location.search).has("guest");
+  const me = { uid: "me", name: "김학생", email: guest ? "stranger@gmail.com" : "student@example.com", photo: "", isAdmin: !guest };
   const friend = { uid: "u2", name: "이친구", photo: "" };
   const t = (min) => new Date(Date.now() - min * 60000);
   const mk = (id, who, min, extra) => ({ id, uid: who.uid, name: who.name, photo: "", createdAt: t(min), ...extra });
@@ -26,7 +28,17 @@ export function createDemoBackend() {
     ],
     r2: [mk("m5", friend, 120, { type: "text", text: "이번 주 실험 준비물 정리해서 올릴게" })],
     r3: [],
+    dm_me_u2: [
+      mk("d1", friend, 15, { type: "text", text: "숙제 다 했어? 🤔" }),
+      mk("d2", me, 14, { type: "text", text: "거의! 수학 3번만 남았어" }),
+      mk("d3", friend, 5, { type: "text", text: "그거 나도 어려웠어 ㅋㅋ 내일 같이 물어보자" }),
+    ],
   };
+  const dms = [{ id: "dm_me_u2", members: ["me", "u2"] }];
+  const invites = new Map([["student@example.com", {}], ["friend@example.com", {}], ["sky@example.com", {}], ["newfriend@gmail.com", {}]]);
+  const inviteSubs = new Set();
+  const emitInvites = () => inviteSubs.forEach((cb) => cb(new Map(invites)));
+  const dmSubs = new Set();
   const blobs = { f1: new Blob(["데모 파일입니다."], { type: "text/plain" }) };
   const users = {
     me: { name: me.name, email: me.email, photo: "", admin: true },
@@ -41,16 +53,19 @@ export function createDemoBackend() {
   const roomSubs = new Set();
   const msgSubs = new Map(); // roomId -> Set(cb)
 
-  const roomView = () => rooms.map((r) => {
+  const roomView = (list = rooms, kind = "group") => list.map((r) => {
     const last = messages[r.id]?.at(-1);
     return {
-      ...r,
+      ...r, kind,
       lastMessageAt: last?.createdAt ?? null,
       lastMessage: last && { uid: last.uid, name: last.name, text: last.type === "file" ? "📎 " + last.file.name : last.text },
     };
   });
   const latest = (roomId) => (messages[roomId] || []).slice(-PAGE_SIZE).map((m) => ({ ...m, _ts: m.createdAt }));
-  const emitRooms = () => roomSubs.forEach((cb) => cb(roomView()));
+  const emitRooms = () => {
+    roomSubs.forEach((cb) => cb(roomView()));
+    dmSubs.forEach((cb) => cb(roomView(dms, "dm")));
+  };
   const emitMsgs = (roomId) => { (msgSubs.get(roomId) || []).forEach((cb) => cb(roomId)); emitRooms(); };
   const push = (roomId, m, who = me) => {
     (messages[roomId] ||= []).push({ id: crypto.randomUUID(), uid: who.uid, name: who === me ? (myName || me.name) : who.name, photo: "", createdAt: new Date(), ...m });
@@ -106,6 +121,18 @@ export function createDemoBackend() {
       if (m.reactions[me.uid] === emoji) delete m.reactions[me.uid]; else m.reactions[me.uid] = emoji;
       emitMsgs(roomId);
     },
+    listenDms(cb) { dmSubs.add(cb); cb(roomView(dms, "dm")); return () => dmSubs.delete(cb); },
+    async openDm(otherUid) {
+      const members = ["me", otherUid].sort();
+      const id = `dm_${members[0]}_${members[1]}`;
+      if (!dms.some((d) => d.id === id)) { dms.push({ id, members }); messages[id] = []; emitRooms(); }
+      return { id, kind: "dm", members };
+    },
+    listenMyInvite(cb) { cb(!guest); return () => {}; },
+    listenInvites(cb) { inviteSubs.add(cb); cb(new Map(invites)); return () => inviteSubs.delete(cb); },
+    async invite(emails) { for (const e of emails) invites.set(e.toLowerCase(), {}); emitInvites(); },
+    async uninvite(email) { invites.delete(email); emitInvites(); },
+
     listenUsers(cb) { userSubs.add(cb); cb(structuredClone(users)); return () => userSubs.delete(cb); },
     listenMyBan(cb) { cb(false); return () => {}; },
     setMyName(name) { myName = name || null; },

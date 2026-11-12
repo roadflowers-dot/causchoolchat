@@ -141,6 +141,50 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .banned-badge { background: #ffe0e0; color: #b42318; }
 
+/* ---------- 방 목록 구역 · 1:1 채팅 ---------- */
+.room-list li.section-title {
+  display: flex; align-items: center; justify-content: space-between; cursor: default;
+  padding: 10px 10px 4px; margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .02em; border-radius: 0;
+}
+.room-list li.section-title:hover { background: transparent; }
+.room-list li.section-title:not(:first-child) { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 14px; }
+.section-btn {
+  border: 0; background: var(--panel-2); color: var(--muted); width: 26px; height: 26px; border-radius: 8px; font-size: 15px;
+}
+.section-btn:hover { color: var(--primary); background: var(--primary-soft); }
+.room-list li.empty { cursor: default; font-size: 13px; padding: 10px; margin: 0; }
+.room-list li.empty:hover { background: transparent; }
+.room-list li.empty.small { font-size: 12.5px; }
+.room-icon.dm-icon { border-radius: 50%; }
+.avatar.clickable { cursor: pointer; }
+.avatar.clickable:hover { box-shadow: 0 0 0 2px var(--primary); }
+.user-list li.pick { cursor: pointer; border-radius: 10px; padding-left: 8px; padding-right: 8px; }
+.user-list li.pick:hover { background: var(--panel-2); }
+.pick-go { font-size: 18px; }
+
+/* ---------- 관리자: 탭 · 초대 ---------- */
+.tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--border); }
+.tab-btn {
+  border: 0; background: transparent; padding: 8px 12px; font-size: 14px; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 700; }
+.tab-panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+.invite-form { display: flex; gap: 8px; align-items: stretch; }
+.invite-form textarea {
+  flex: 1; font: inherit; font-size: 14px; color: var(--text); background: var(--panel-2); resize: vertical;
+  border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; min-height: 44px;
+}
+.invite-form textarea:focus { outline: none; border-color: var(--primary); }
+.invite-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.migrate-box {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13.5px; line-height: 1.5;
+  background: #fff4e5; color: #7a4a00; border: 1px solid #f5d9a8; border-radius: 12px; padding: 10px 12px;
+}
+.migrate-box .primary-btn { margin-left: auto; }
+.invite-avatar { background: var(--panel-2); font-size: 16px; }
+.user-list li .pill-btn { flex: none; }
+
 /* ---------- 앱 설치 버튼 ---------- */
 .install-btn {
   border: 0; background: linear-gradient(135deg, #5c84ff, #3458e6); color: #fff; font-weight: 700;
