@@ -185,6 +185,35 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .invite-avatar { background: var(--panel-2); font-size: 16px; }
 .user-list li .pill-btn { flex: none; }
 
+/* ---------- 외부 사람 (등록 대기) ---------- */
+body.guest #composer, body.guest #files-btn, body.guest #new-room-btn, body.guest .menu-wrap,
+body.guest #reply-bar, body.guest #upload-progress { display: none !important; }
+.guest-card {
+  margin: auto; text-align: center; max-width: 420px; padding: 32px 24px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); line-height: 1.6;
+}
+.guest-card .logo { font-size: 46px; }
+.guest-card h3 { margin: 8px 0 10px; font-size: 19px; }
+.guest-card p { margin: 0 0 10px; color: var(--muted); font-size: 14.5px; }
+.guest-card p b { color: var(--text); }
+.count-badge {
+  position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: var(--unread); color: #fff; font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
+}
+.pending-box {
+  border: 1px solid #ffc9c9; background: #fff5f5; border-radius: 12px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pending-title { font-size: 14px; color: #a61e1e; }
+.pending-box .user-list { min-height: 0; }
+.pending-box .user-list li { border-bottom-color: #ffe0e0; }
+.pending-box .user-list li:last-child { border-bottom: 0; }
+.pill-btn.ok { color: #fff; background: var(--primary); border-color: var(--primary); }
+.pill-btn.ok:hover { background: var(--primary-hover); color: #fff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pending-box { background: #2c1d1f; border-color: #4a2a2d; } :root:not([data-theme="light"]) .pending-title { color: #ff9b9b; } }
+:root[data-theme="dark"] .pending-box { background: #2c1d1f; border-color: #4a2a2d; }
+:root[data-theme="dark"] .pending-title { color: #ff9b9b; }
+
 /* ---------- 앱 설치 버튼 ---------- */
 .install-btn {
   border: 0; background: linear-gradient(135deg, #5c84ff, #3458e6); color: #fff; font-weight: 700;

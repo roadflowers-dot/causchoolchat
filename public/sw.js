@@ -1,5 +1,5 @@
 // 서비스 워커: ① 앱 설치(홈 화면에 추가) ② 인터넷이 잠깐 끊겨도 화면 열기 ③ 알림 클릭 처리
-const CACHE = "causchoolchat-v4";
+const CACHE = "causchoolchat-v6";
 const SHELL = [
   "./", "index.html", "css/style.css", "manifest.json",
   "js/app.js", "js/firebase-config.js", "js/backend-firebase.js", "js/backend-demo.js",
@@ -52,7 +52,7 @@ self.addEventListener("notificationclick", (event) => {
     const client = all[0];
     if (client) {
       await client.focus();
-      client.postMessage({ roomId });
+      client.postMessage({ roomId, admin: !!event.notification.data?.admin });
     } else {
       await self.clients.openWindow("./");
     }

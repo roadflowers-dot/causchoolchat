@@ -193,6 +193,35 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     },
     uninvite(email) { return deleteDoc(doc(db, "invites", email.toLowerCase())); },
 
+    // ----- 외부 사람 입장 요청 -----
+    // 등록 안 된 사람이 들어오면 자기 정보를 남김 (관리자에게 알림이 감)
+    requestEntry() {
+      const u = auth.currentUser;
+      return setDoc(doc(db, "pending", u.uid), {
+        email: u.email, name: (u.displayName || "").slice(0, 100), photo: u.photoURL || null, at: serverTimestamp(),
+      });
+    },
+    listenPending(cb) {
+      return onSnapshot(collection(db, "pending"), (snap) => {
+        cb(snap.docs.map((d) => ({ uid: d.id, ...d.data(), at: d.data({ serverTimestamps: "estimate" }).at?.toDate?.() ?? new Date() })));
+      }, console.warn);
+    },
+    // 초대: 초대 목록에 넣고 입장 요청은 지움
+    async approvePending(p) {
+      const batch = writeBatch(db);
+      batch.set(doc(db, "invites", p.email.toLowerCase()), { by: auth.currentUser.uid, at: serverTimestamp() });
+      batch.delete(doc(db, "pending", p.uid));
+      await batch.commit();
+    },
+    // 차단: 차단 목록에 넣고 입장 요청은 지움
+    async rejectPending(p) {
+      const batch = writeBatch(db);
+      batch.set(doc(db, "banned", p.uid), { by: auth.currentUser.uid, at: serverTimestamp() });
+      batch.delete(doc(db, "pending", p.uid));
+      await batch.commit();
+    },
+    dismissPending(uid) { return deleteDoc(doc(db, "pending", uid)); },
+
     // ----- 프로필 -----
     listenUsers(cb) {
       return onSnapshot(collection(db, "users"), (snap) => {

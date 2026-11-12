@@ -37,6 +37,8 @@ let groupRooms = [], dmRooms = [];  // 단체방 / 1:1 채팅방
 let invitesMap = new Map();          // (관리자) 초대된 이메일 목록
 let offDms = null, offMyInvite = null, offInvites = null;
 let access = { invited: null, banned: null };
+let pendingList = [], offPending = null, seenPending = null; // (관리자) 외부 사람 입장 요청
+let entryRequested = false;
 let firstRenderOfRoom = false;
 let users = {};         // uid -> { nickname, avatar, photo, name, email, admin }
 let bannedSet = new Set();
@@ -52,7 +54,8 @@ backend.onAuth((user, error) => {
   if (error) $("login-error").textContent = error;
 
   $("banned-view").hidden = true;
-  $("uninvited-view").hidden = true;
+  document.body.classList.remove("guest");
+  entryRequested = false;
   if (user) {
     renderMe();
     prevLastAt = {};
@@ -75,14 +78,41 @@ backend.onAuth((user, error) => {
 
 function applyAccess() {
   if (access.invited === null || access.banned === null) return; // 아직 확인 중
-  const uninvited = !access.invited;
-  const banned = access.invited && access.banned;
-  $("uninvited-view").hidden = !uninvited;
+  const banned = access.banned;
+  const guest = !banned && !access.invited; // 등록 안 된 외부 사람: 사이트엔 들어오지만 채팅방은 못 봄
   $("banned-view").hidden = !banned;
-  $("chat-view").hidden = uninvited || banned;
-  if (uninvited) $("uninvited-email").textContent = me.email;
-  if (uninvited || banned) stopListening();
-  else if (!offRooms) startListening();
+  $("chat-view").hidden = banned;
+  if (banned) { stopListening(); document.body.classList.remove("guest"); return; }
+  if (guest) return enterGuestMode();
+  if (document.body.classList.contains("guest")) { // 관리자가 초대함 → 바로 채팅방 열림
+    document.body.classList.remove("guest");
+    $("messages").replaceChildren();
+    toast("🎉 관리자가 초대했어요! 이제 채팅방에 들어갈 수 있어요.");
+  }
+  if (!offRooms) startListening();
+}
+
+// 등록 안 된 외부 사람 화면: 사이트 화면은 보이지만 채팅방·친구 목록은 비어 있고, 관리자에게 입장 알림을 보냄
+function enterGuestMode() {
+  stopListening();
+  document.body.classList.add("guest");
+  const waitLi = el("li", "empty");
+  waitLi.innerHTML = "🔒 아직 등록되지 않아서<br>채팅방이 보이지 않아요";
+  $("room-list").replaceChildren(waitLi);
+  $("room-title").textContent = "입장 대기 중";
+  $("room-icon").replaceWith(Object.assign(el("span", "room-icon"), { id: "room-icon" }));
+  $("notice").hidden = true;
+  $("files-panel").hidden = true;
+  setComposerEnabled(false);
+  const card = el("div", "guest-card");
+  card.innerHTML = `<div class="logo">🚪</div>
+    <h3>관리자의 확인을 기다리고 있어요</h3>
+    <p>지금 로그인한 계정 <b></b> 은(는) 아직 등록되지 않았어요.
+    관리자에게 <b>입장 알림</b>을 보냈어요. 관리자가 초대하면 새로고침하지 않아도 <b>자동으로 채팅방이 열려요.</b></p>
+    <p class="hint">다른 계정으로 들어가려면 '로그아웃'을 눌러 주세요. (휴대폰은 왼쪽 위 ☰ 메뉴 안에 있어요)</p>`;
+  card.querySelector("p b").textContent = me.email;
+  $("messages").replaceChildren(card);
+  if (!entryRequested) { entryRequested = true; backend.requestEntry().catch(console.warn); }
 }
 
 function startListening() {
@@ -96,17 +126,18 @@ function startListening() {
   });
   offRooms = backend.listenRooms((list) => onRooms("group", list));
   offDms = backend.listenDms((list) => onRooms("dm", list));
-  if (isAdmin()) offInvites = backend.listenInvites((map) => { invitesMap = map; if ($("admin-dialog").open) { renderInviteList(); renderUserList(); } });
-  if (isAdmin()) offBanned = backend.listenBanned((set) => { bannedSet = set; if ($("admin-dialog").open) renderUserList(); });
+  if (isAdmin()) offInvites = backend.listenInvites((map) => { invitesMap = map; updatePendingUI(); if ($("admin-dialog").open) { renderInviteList(); renderUserList(); } });
+  if (isAdmin()) offBanned = backend.listenBanned((set) => { bannedSet = set; updatePendingUI(); if ($("admin-dialog").open) renderUserList(); });
+  if (isAdmin()) offPending = backend.listenPending(onPending);
 }
 function stopListening() {
-  for (const off of [offRooms, offDms, offMessages, offFiles, offUsers, offBanned, offInvites]) off?.();
-  offRooms = offDms = offMessages = offFiles = offUsers = offBanned = offInvites = null;
+  for (const off of [offRooms, offDms, offMessages, offFiles, offUsers, offBanned, offInvites, offPending]) off?.();
+  offRooms = offDms = offMessages = offFiles = offUsers = offBanned = offInvites = offPending = null;
+  pendingList = []; seenPending = null;
   groupRooms = []; dmRooms = []; rooms = [];
   currentRoom = null;
 }
 $("banned-logout").onclick = () => backend.signOut();
-$("uninvited-logout").onclick = () => backend.signOut();
 
 $("login-btn").onclick = () => backend.signIn().catch((e) => {
   if (e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request") return;
@@ -671,6 +702,7 @@ let swReg = null;
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").then((r) => (swReg = r)).catch(() => {});
   navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.admin && isAdmin()) return openPendingAdmin();
     const room = rooms.find((r) => r.id === e.data?.roomId);
     if (room) openRoom(room);
   });
@@ -755,7 +787,10 @@ function updateAvatarPreview() {
   $("profile-avatar-preview").replaceChildren(avatarEl(me.uid, me.name, me.photo, draftAvatar));
   for (const b of $("emoji-grid").children) b.classList.toggle("selected", draftAvatar === "emoji:" + b.textContent);
 }
-$("profile-btn").onclick = openProfile;
+$("profile-btn").onclick = () => {
+  if (document.body.classList.contains("guest")) return toast("관리자가 초대한 뒤에 프로필을 바꿀 수 있어요");
+  openProfile();
+};
 $("avatar-google").onclick = () => { draftAvatar = ""; updateAvatarPreview(); };
 $("avatar-file").onchange = async (e) => {
   const file = e.target.files[0];
@@ -802,9 +837,94 @@ function resizeImage(file, size) {
 $("admin-btn").onclick = () => {
   $("user-search").value = "";
   showAdminTab("invite");
-  renderInviteList(); renderUserList();
+  renderInviteList(); renderUserList(); renderPendingList();
   $("admin-dialog").showModal();
 };
+// ----- 외부 사람 입장 알림 (관리자) -----
+// 아직 결정하지 않은 입장 요청 (이미 초대했거나 차단한 사람은 빼고)
+function visiblePending() {
+  return pendingList
+    .filter((p) => !invitesMap.has((p.email || "").toLowerCase()) && !bannedSet.has(p.uid))
+    .sort((a, b) => b.at - a.at);
+}
+function onPending(list) {
+  pendingList = list;
+  const vis = visiblePending();
+  if (seenPending === null) { // 처음 불러왔을 때: 밀린 요청이 있으면 한 번 알려줌
+    seenPending = new Set(list.map((p) => p.uid));
+    if (vis.length) toast(`🚪 확인하지 않은 외부 사람 입장이 ${vis.length}건 있어요 (눌러서 확인)`, openPendingAdmin);
+  } else {
+    for (const p of vis) {
+      if (seenPending.has(p.uid)) continue;
+      const who = `${p.name || "이름 없음"} (${p.email})`;
+      if (!document.hidden) toast(`🚪 외부 사람이 들어왔어요: ${who} — 눌러서 초대/차단`, openPendingAdmin);
+      else if (notifyOn()) showEntryNotification(who);
+    }
+    seenPending = new Set(list.map((p) => p.uid));
+  }
+  updatePendingUI();
+}
+function showEntryNotification(who) {
+  const options = { body: `${who}\n눌러서 초대하거나 차단하세요`, tag: "entry", renotify: true, data: { admin: true } };
+  try {
+    if (swReg) return swReg.showNotification("🚪 외부 사람 입장", options);
+    const n = new Notification("🚪 외부 사람 입장", options);
+    n.onclick = () => { window.focus(); openPendingAdmin(); n.close(); };
+  } catch {}
+}
+function updatePendingUI() {
+  if (!isAdmin()) return;
+  const n = visiblePending().length;
+  $("admin-badge-count").hidden = !n;
+  $("admin-badge-count").textContent = n > 9 ? "9+" : n;
+  if ($("admin-dialog").open) renderPendingList();
+}
+function openPendingAdmin() {
+  $("user-search").value = "";
+  showAdminTab("invite");
+  renderInviteList(); renderUserList(); renderPendingList();
+  if (!$("admin-dialog").open) $("admin-dialog").showModal();
+  $("pending-box").scrollIntoView({ block: "nearest" });
+}
+function renderPendingList() {
+  const vis = visiblePending();
+  $("pending-box").hidden = !vis.length;
+  $("pending-count").textContent = vis.length;
+  const ul = $("pending-list");
+  ul.replaceChildren();
+  for (const p of vis) {
+    const li = el("li");
+    const img = el("img", "avatar");
+    img.alt = ""; img.referrerPolicy = "no-referrer";
+    img.src = p.photo || avatarFallback(p.name);
+    img.onerror = () => { img.onerror = null; img.src = avatarFallback(p.name); };
+    li.append(img);
+    const info = el("div", "user-info");
+    info.append(el("div", "user-name", p.name || "이름 없음"));
+    info.append(el("div", "user-email", `${p.email} · ${timeAgo(p.at)}`));
+    li.append(info);
+    const ok = el("button", "pill-btn ok", "초대");
+    ok.onclick = async () => {
+      try { await backend.approvePending(p); toast(`${p.name || p.email} 님을 초대했어요. 바로 채팅방에 들어갈 수 있어요.`); }
+      catch (e) { toast("실패했어요: " + e.message); }
+    };
+    const no = el("button", "pill-btn danger", "차단");
+    no.onclick = async () => {
+      if (!confirm(`${p.name || ""} (${p.email}) 님을 차단할까요?\n차단하면 이 사이트를 이용할 수 없어요.`)) return;
+      try { await backend.rejectPending(p); toast("차단했어요"); } catch (e) { toast("실패했어요: " + e.message); }
+    };
+    li.append(ok, no);
+    ul.append(li);
+  }
+}
+function timeAgo(d) {
+  const m = Math.round((Date.now() - d) / 60000);
+  if (m < 1) return "방금";
+  if (m < 60) return `${m}분 전`;
+  if (m < 1440) return `${Math.round(m / 60)}시간 전`;
+  return d.toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+}
+
 function showAdminTab(tab) {
   for (const b of document.querySelectorAll(".tab-btn")) b.classList.toggle("active", b.dataset.tab === tab);
   $("tab-invite").hidden = tab !== "invite";

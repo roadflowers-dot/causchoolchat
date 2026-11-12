@@ -39,6 +39,14 @@ export function createDemoBackend() {
   const inviteSubs = new Set();
   const emitInvites = () => inviteSubs.forEach((cb) => cb(new Map(invites)));
   const dmSubs = new Set();
+  // 데모: 등록 안 된 외부 사람의 입장 요청
+  let pending = [{ uid: "x1", email: "stranger.kim@gmail.com", name: "김낯선", photo: null, at: new Date(Date.now() - 3 * 60000) }];
+  const pendingSubs = new Set();
+  const emitPending = () => pendingSubs.forEach((cb) => cb([...pending]));
+  window.demoStrangerArrives = () => {
+    pending.push({ uid: "x" + Date.now(), email: "visitor" + (pending.length + 1) + "@gmail.com", name: "방문자" + (pending.length + 1), photo: null, at: new Date() });
+    emitPending();
+  };
   const blobs = { f1: new Blob(["데모 파일입니다."], { type: "text/plain" }) };
   const users = {
     me: { name: me.name, email: me.email, photo: "", admin: true },
@@ -132,6 +140,11 @@ export function createDemoBackend() {
     listenInvites(cb) { inviteSubs.add(cb); cb(new Map(invites)); return () => inviteSubs.delete(cb); },
     async invite(emails) { for (const e of emails) invites.set(e.toLowerCase(), {}); emitInvites(); },
     async uninvite(email) { invites.delete(email); emitInvites(); },
+    async requestEntry() { console.log("[데모] 입장 요청을 남김"); },
+    listenPending(cb) { pendingSubs.add(cb); cb([...pending]); return () => pendingSubs.delete(cb); },
+    async approvePending(p) { invites.set(p.email.toLowerCase(), {}); pending = pending.filter((x) => x.uid !== p.uid); emitInvites(); emitPending(); },
+    async rejectPending(p) { banned.add(p.uid); pending = pending.filter((x) => x.uid !== p.uid); emitBans(); emitPending(); },
+    async dismissPending(uid) { pending = pending.filter((x) => x.uid !== uid); emitPending(); },
 
     listenUsers(cb) { userSubs.add(cb); cb(structuredClone(users)); return () => userSubs.delete(cb); },
     listenMyBan(cb) { cb(false); return () => {}; },

@@ -41,16 +41,6 @@
     </div>
   </section>
 
-  <!-- 초대받지 않은 계정 화면 -->
-  <section id="uninvited-view" class="login-view" hidden>
-    <div class="login-card">
-      <div class="logo">🔒</div>
-      <h1>초대받은 사람만<br />들어올 수 있어요</h1>
-      <p>지금 로그인한 계정 <b id="uninvited-email"></b> 은(는) 초대 목록에 없어요.<br />관리자에게 이 Gmail 주소로 초대해 달라고 말해 주세요.</p>
-      <button id="uninvited-logout" class="google-btn">다른 계정으로 로그인</button>
-    </div>
-  </section>
-
   <!-- 차단된 사용자 화면 -->
   <section id="banned-view" class="login-view" hidden>
     <div class="login-card">
@@ -70,7 +60,7 @@
       <header class="sidebar-header">
         <strong class="brand">💬 중대부초</strong>
         <div class="header-actions">
-          <button id="admin-btn" class="icon-btn" title="관리자 메뉴" hidden>👑</button>
+          <button id="admin-btn" class="icon-btn" title="관리자 메뉴" hidden>👑<span id="admin-badge-count" class="count-badge" hidden></span></button>
           <button id="notify-btn" class="icon-btn" title="새 메시지 알림 켜기">🔕</button>
           <button id="theme-btn" class="icon-btn" title="다크 모드">🌙</button>
           <button id="new-room-btn" class="icon-btn" title="새 채팅방">＋</button>
@@ -176,7 +166,12 @@
 
       <!-- 초대 관리 -->
       <div id="tab-invite" class="tab-panel">
-        <p class="hint">🔒 <b>초대한 Gmail 계정만</b> 채팅방에 들어올 수 있어요. 초대받지 않은 사람은 로그인해도 아무것도 볼 수 없어요.</p>
+        <!-- 외부 사람 입장 알림 -->
+        <div id="pending-box" class="pending-box" hidden>
+          <div class="pending-title">🚪 새로 들어온 외부 사람 <b id="pending-count">0</b>명 — 초대하거나 차단해 주세요</div>
+          <ul id="pending-list" class="user-list"></ul>
+        </div>
+        <p class="hint">🔒 <b>등록(초대)된 Gmail 계정만</b> 채팅방에 들어올 수 있어요. 등록 안 된 사람이 로그인하면 채팅방이 안 보이고, 여기에 입장 알림이 와요.</p>
         <div id="invite-migrate" class="migrate-box" hidden>
           ⚠️ 지금까지 사이트를 쓴 사람 중 <b id="invite-migrate-count">0</b>명이 초대 목록에 없어서 들어올 수 없어요.
           <button type="button" id="invite-all" class="primary-btn">모두 초대하기</button>
