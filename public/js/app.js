@@ -34,6 +34,10 @@ let openActionsId = null, pickerId = null;
 let offRooms = null, offMessages = null, offFiles = null;
 let prevLastAt = null;  // 방별 마지막 메시지 시간 (새 메시지 알림 판단용)
 let firstRenderOfRoom = false;
+let users = {};         // uid -> { nickname, avatar, photo, name, email, admin }
+let bannedSet = new Set();
+let offUsers = null, offMyBan = null, offBanned = null;
+const isAdmin = () => !!me?.isAdmin;
 
 // ---------- 로그인 / 로그아웃 ----------
 backend.onAuth((user, error) => {
@@ -43,18 +47,45 @@ backend.onAuth((user, error) => {
   $("login-error").hidden = !error;
   if (error) $("login-error").textContent = error;
 
+  $("banned-view").hidden = true;
   if (user) {
-    $("me-name").textContent = user.name;
-    $("me-email").textContent = user.email;
-    $("me-photo").src = user.photo || avatarFallback(user.name);
+    renderMe();
     prevLastAt = null;
-    offRooms = backend.listenRooms(onRooms);
+    $("admin-btn").hidden = !isAdmin();
+    // 차단 여부를 먼저 확인한 뒤 채팅 데이터를 불러옴 (관리자가 차단하면 바로 화면이 바뀜)
+    offMyBan = backend.listenMyBan((isBanned) => {
+      const blocked = isBanned && !isAdmin();
+      $("banned-view").hidden = !blocked;
+      $("chat-view").hidden = blocked;
+      if (blocked) stopListening();
+      else if (!offRooms) startListening();
+    });
   } else {
-    offRooms?.(); offMessages?.(); offFiles?.();
+    stopListening(); offMyBan?.(); offMyBan = null;
     currentRoom = null;
+    users = {};
     document.title = SITE_TITLE;
   }
 });
+
+function startListening() {
+  offUsers = backend.listenUsers((u) => {
+    users = u;
+    backend.setMyName(users[me.uid]?.nickname);
+    renderMe();
+    renderRooms();
+    if (currentRoom) renderMessages();
+    if ($("admin-dialog").open) renderUserList();
+  });
+  offRooms = backend.listenRooms(onRooms);
+  if (isAdmin()) offBanned = backend.listenBanned((set) => { bannedSet = set; if ($("admin-dialog").open) renderUserList(); });
+}
+function stopListening() {
+  for (const off of [offRooms, offMessages, offFiles, offUsers, offBanned]) off?.();
+  offRooms = offMessages = offFiles = offUsers = offBanned = null;
+  currentRoom = null;
+}
+$("banned-logout").onclick = () => backend.signOut();
 
 $("login-btn").onclick = () => backend.signIn().catch((e) => {
   if (e.code === "auth/popup-closed-by-user" || e.code === "auth/cancelled-popup-request") return;
@@ -73,7 +104,21 @@ function onRooms(list) {
     const saved = safeGet("lastRoom");
     openRoom(rooms.find((r) => r.id === saved) || rooms[0]);
   } else {
-    if (currentRoom) currentRoom = rooms.find((r) => r.id === currentRoom.id) || currentRoom;
+    if (currentRoom) {
+      const updated = rooms.find((r) => r.id === currentRoom.id);
+      if (!updated) { // 관리자가 방을 삭제함
+        currentRoom = null;
+        offMessages?.(); offFiles?.();
+        if (rooms.length) return openRoom(rooms[0]);
+        $("room-title").textContent = "채팅방을 선택하세요";
+        $("messages").innerHTML = "";
+        $("notice").hidden = true;
+      } else {
+        currentRoom = updated;
+        $("room-title").textContent = updated.name;
+        renderNotice();
+      }
+    }
     renderRooms();
   }
   setComposerEnabled(!!currentRoom);
@@ -90,7 +135,7 @@ function renderRooms() {
     const text = el("div", "room-text");
     text.append(el("div", "room-name", room.name));
     const lm = room.lastMessage;
-    text.append(el("div", "room-preview", lm ? `${lm.uid === me?.uid ? "나" : lm.name}: ${lm.text}` : "새 채팅방"));
+    text.append(el("div", "room-preview", lm ? `${lm.uid === me?.uid ? "나" : displayName(lm.uid, lm.name)}: ${lm.text}` : "새 채팅방"));
     li.append(text);
     if (unread) li.append(el("span", "unread-dot"));
     li.onclick = () => openRoom(room);
@@ -122,6 +167,8 @@ function openRoom(room) {
   safeSet("lastRoom", room.id);
   $("room-title").textContent = room.name;
   $("room-icon").replaceWith(Object.assign(roomIcon(room), { id: "room-icon" }));
+  $("room-menu-btn").hidden = !isAdmin();
+  renderNotice();
   closeSidebar();
   setComposerEnabled(true);
 
@@ -237,18 +284,15 @@ function messageEl(m, grouped) {
   const wrap = el("div", "msg" + (mine ? " mine" : "") + (grouped ? " grouped" : "") + (openActionsId === m.id ? " show-actions" : ""));
   wrap.dataset.id = m.id;
 
-  if (!mine) {
-    const img = el("img", "avatar");
-    img.referrerPolicy = "no-referrer";
-    img.src = m.photo || avatarFallback(m.name);
-    img.onerror = () => { img.onerror = null; img.src = avatarFallback(m.name); };
-    wrap.append(img);
-  }
+  if (!mine) wrap.append(avatarEl(m.uid, m.name, m.photo));
 
   const body = el("div", "body");
   if (!grouped) {
     const meta = el("div", "meta");
-    if (!mine) meta.append(el("b", null, m.name));
+    if (!mine) {
+      meta.append(el("b", null, displayName(m.uid, m.name)));
+      if (users[m.uid]?.admin) meta.append(el("span", "admin-badge", "관리자"));
+    }
     meta.append(formatTime(m.createdAt));
     body.append(meta);
   }
@@ -308,7 +352,7 @@ function actionsEl(m, mine) {
   const add = (icon, title, fn, cls) => { const b = el("button", cls, icon); b.title = title; b.onclick = fn; bar.append(b); };
   add("😊", "반응 남기기", () => { pickerId = m.id; openActionsId = m.id; renderMessages(); });
   add("↩", "답장", () => setReply(m));
-  if (mine) add("🗑", "삭제", () => removeMessage(m), "del");
+  if (mine || isAdmin()) add("🗑", mine ? "삭제" : "삭제 (관리자)", () => removeMessage(m), "del");
   return bar;
 }
 
@@ -338,7 +382,7 @@ async function react(m, emoji) {
 }
 
 async function removeMessage(m) {
-  if (!confirm(m.type === "file" ? `'${m.file.name}' 파일을 삭제할까요?\n다른 사람도 더 이상 받을 수 없어요.` : "이 메시지를 삭제할까요?")) return;
+  if (!confirm((m.uid !== me?.uid ? "[관리자] " : "") + (m.type === "file" ? `'${m.file.name}' 파일을 삭제할까요?\n다른 사람도 더 이상 받을 수 없어요.` : "이 메시지를 삭제할까요?"))) return;
   openActionsId = pickerId = null;
   try {
     await backend.deleteMessage(currentRoom.id, m);
@@ -360,8 +404,8 @@ function jumpTo(id) {
 
 // ---------- 답장 ----------
 function setReply(m) {
-  replyTo = { id: m.id, name: m.name, text: m.type === "file" ? "📎 " + m.file.name : m.text.slice(0, 80) };
-  $("reply-name").textContent = m.uid === me?.uid ? "나" : m.name;
+  replyTo = { id: m.id, name: displayName(m.uid, m.name), text: m.type === "file" ? "📎 " + m.file.name : m.text.slice(0, 80) };
+  $("reply-name").textContent = m.uid === me?.uid ? "나" : displayName(m.uid, m.name);
   $("reply-text").textContent = replyTo.text;
   $("reply-bar").hidden = false;
   openActionsId = pickerId = null;
@@ -470,7 +514,7 @@ function renderFiles(files) {
   for (const f of files) {
     const li = el("li");
     const card = fileEl(f, true); // 목록에선 이미지도 카드로 표시
-    card.querySelector(".size").textContent += ` · ${f.uploaderName}`;
+    card.querySelector(".size").textContent += ` · ${displayName(f.uid, f.uploaderName)}`;
     li.append(card);
     list.append(li);
   }
@@ -545,8 +589,9 @@ function notifyNewMessages(list) {
     if (!lm || lm.uid === me?.uid || at <= (prev.get(room.id) ?? 0)) continue;
     const viewing = room.id === currentRoom?.id && !document.hidden;
     if (viewing) continue;
-    if (!document.hidden) toast(`💬 ${room.name} · ${lm.name}: ${lm.text}`, () => openRoom(room));
-    else if (notifyOn()) showNotification(room, `${lm.name}: ${lm.text}`);
+    const who = displayName(lm.uid, lm.name);
+    if (!document.hidden) toast(`💬 ${room.name} · ${who}: ${lm.text}`, () => openRoom(room));
+    else if (notifyOn()) showNotification(room, `${who}: ${lm.text}`);
   }
 }
 
@@ -557,6 +602,213 @@ function showNotification(room, body) {
     const n = new Notification(room.name, options);
     n.onclick = () => { window.focus(); openRoom(room); n.close(); };
   } catch {}
+}
+
+// ---------- 이름·프로필 사진 ----------
+function displayName(uid, fallback) { return users[uid]?.nickname || users[uid]?.name || fallback || "이름 없음"; }
+
+const EMOJI_BG = ["#ffe3e3", "#fff0d6", "#fff9db", "#e6fcf5", "#e7f5ff", "#f3f0ff", "#ffe8f5", "#ebfbee"];
+function avatarEl(uid, fallbackName, fallbackPhoto, avatarOverride) {
+  const u = users[uid] || {};
+  const avatar = avatarOverride ?? u.avatar ?? "";
+  if (avatar.startsWith("emoji:")) {
+    const span = el("span", "avatar emoji-avatar", avatar.slice(6));
+    let h = 0; for (const ch of uid) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    span.style.background = EMOJI_BG[h % EMOJI_BG.length];
+    return span;
+  }
+  const img = el("img", "avatar");
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+  const name = displayName(uid, fallbackName);
+  img.src = avatar.startsWith("data:image/") ? avatar : (u.photo || fallbackPhoto || avatarFallback(name));
+  img.onerror = () => { img.onerror = null; img.src = avatarFallback(name); };
+  return img;
+}
+
+function renderMe() {
+  if (!me) return;
+  $("me-avatar").replaceChildren(avatarEl(me.uid, me.name, me.photo));
+  $("me-name").replaceChildren(displayName(me.uid, me.name));
+  if (isAdmin()) $("me-name").append(el("span", "admin-badge", "관리자"));
+}
+
+// ---------- 프로필 수정 ----------
+const AVATAR_EMOJIS = ["🐶", "🐱", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯", "🦁", "🐸", "🐵", "🐧", "🐥", "🦄", "🐙", "🐳", "🦖", "🐝", "🌻", "⭐", "⚽", "🎨", "🎵", "🚀"];
+let draftAvatar = "";
+
+function openProfile() {
+  const u = users[me.uid] || {};
+  draftAvatar = u.avatar || "";
+  $("nickname-input").value = u.nickname || me.name || "";
+  $("profile-email").textContent = `로그인 계정: ${me.email}`;
+  const grid = $("emoji-grid");
+  grid.replaceChildren(...AVATAR_EMOJIS.map((e) => {
+    const b = el("button", "emoji-choice", e);
+    b.type = "button";
+    b.onclick = () => { draftAvatar = "emoji:" + e; updateAvatarPreview(); };
+    return b;
+  }));
+  updateAvatarPreview();
+  $("profile-dialog").showModal();
+}
+function updateAvatarPreview() {
+  $("profile-avatar-preview").replaceChildren(avatarEl(me.uid, me.name, me.photo, draftAvatar));
+  for (const b of $("emoji-grid").children) b.classList.toggle("selected", draftAvatar === "emoji:" + b.textContent);
+}
+$("profile-btn").onclick = openProfile;
+$("avatar-google").onclick = () => { draftAvatar = ""; updateAvatarPreview(); };
+$("avatar-file").onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try { draftAvatar = await resizeImage(file, 160); updateAvatarPreview(); }
+  catch { toast("이 사진은 사용할 수 없어요. 다른 사진을 골라 주세요."); }
+};
+$("profile-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const nickname = $("nickname-input").value.trim().slice(0, 20);
+  if (!nickname) return toast("닉네임을 입력해 주세요");
+  $("profile-save").disabled = true;
+  try {
+    await backend.updateProfile({ nickname, avatar: draftAvatar });
+    backend.setMyName(nickname);
+    $("profile-dialog").close();
+    toast("프로필을 저장했어요");
+  } catch (err) {
+    toast("저장하지 못했어요: " + err.message);
+  } finally {
+    $("profile-save").disabled = false;
+  }
+};
+
+// 프로필 사진을 작은 정사각형 JPEG로 줄여서 저장 (보통 10KB 안팎)
+function resizeImage(file, size) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(img.width, img.height);
+      const canvas = Object.assign(document.createElement("canvas"), { width: size, height: size });
+      canvas.getContext("2d").drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+
+// ---------- 관리자 ----------
+$("admin-btn").onclick = () => { $("user-search").value = ""; renderUserList(); $("admin-dialog").showModal(); };
+$("user-search").oninput = renderUserList;
+
+function renderUserList() {
+  const q = $("user-search").value.trim().toLowerCase();
+  const list = Object.entries(users)
+    .map(([uid, u]) => ({ uid, ...u, display: displayName(uid, u.name) }))
+    .filter((u) => !q || u.display.toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q) || (u.name || "").toLowerCase().includes(q))
+    .sort((a, b) => (bannedSet.has(b.uid) - bannedSet.has(a.uid)) || a.display.localeCompare(b.display, "ko"));
+  const ul = $("user-list");
+  ul.replaceChildren();
+  if (!list.length) ul.append(el("li", "empty", "사용자가 없어요"));
+  for (const u of list) {
+    const banned = bannedSet.has(u.uid);
+    const li = el("li", banned ? "banned" : "");
+    li.append(avatarEl(u.uid, u.name, u.photo));
+    const info = el("div", "user-info");
+    const nameLine = el("div", "user-name", u.display);
+    if (u.nickname && u.name && u.nickname !== u.name) nameLine.append(el("span", "user-real", ` (${u.name})`));
+    if (u.admin) nameLine.append(el("span", "admin-badge", "관리자"));
+    if (banned) nameLine.append(el("span", "banned-badge", "차단됨"));
+    info.append(nameLine, el("div", "user-email", u.email || ""));
+    li.append(info);
+    if (u.uid !== me.uid && !u.admin) {
+      const b = el("button", banned ? "pill-btn" : "pill-btn danger", banned ? "차단 해제" : "차단");
+      b.onclick = async () => {
+        if (!banned && !confirm(`${u.display}(${u.email}) 님을 차단할까요?\n차단하면 채팅방을 보거나 메시지를 보낼 수 없어요.`)) return;
+        try { banned ? await backend.unban(u.uid) : await backend.ban(u.uid); toast(banned ? "차단을 풀었어요" : "차단했어요"); }
+        catch (e) { toast("실패했어요: " + e.message); }
+      };
+      li.append(b);
+    }
+    ul.append(li);
+  }
+}
+
+function renderNotice() {
+  const text = currentRoom?.notice?.text;
+  $("notice").hidden = !text;
+  $("notice-text").textContent = text || "";
+}
+
+$("room-menu-btn").onclick = (e) => { e.stopPropagation(); $("room-menu").hidden = !$("room-menu").hidden; };
+document.addEventListener("click", (e) => { if (!e.target.closest(".menu-wrap")) $("room-menu").hidden = true; });
+$("room-menu").onclick = async (e) => {
+  const act = e.target.closest("button")?.dataset.act;
+  if (!act || !currentRoom) return;
+  $("room-menu").hidden = true;
+  const room = currentRoom;
+  try {
+    if (act === "notice") {
+      const text = prompt("공지 내용을 입력하세요 (비우면 공지를 내려요)", room.notice?.text || "");
+      if (text === null) return;
+      await backend.setNotice(room.id, text.trim().slice(0, 200));
+      toast(text.trim() ? "공지를 올렸어요" : "공지를 내렸어요");
+    } else if (act === "rename") {
+      const name = prompt("새 방 이름 (40자까지)", room.name)?.trim();
+      if (!name || name === room.name) return;
+      await backend.renameRoom(room.id, name.slice(0, 40));
+      toast("방 이름을 바꿨어요");
+    } else if (act === "delete") {
+      if (!confirm(`'${room.name}' 방을 삭제할까요?\n방의 모든 메시지와 파일이 영구히 지워져요.`)) return;
+      if (prompt(`정말 삭제하려면 방 이름을 그대로 입력하세요:\n${room.name}`) !== room.name) return toast("방 이름이 달라서 취소했어요");
+      toast("삭제하는 중…");
+      await backend.deleteRoom(room.id);
+      toast("방을 삭제했어요");
+    }
+  } catch (err) {
+    toast("실패했어요: " + err.message);
+  }
+};
+
+// ---------- 앱 설치 (PWA) ----------
+let installPrompt = null;
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+function updateInstallButtons() {
+  for (const b of document.querySelectorAll(".install-btn")) b.hidden = isStandalone();
+}
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; updateInstallButtons(); });
+window.addEventListener("appinstalled", () => { installPrompt = null; updateInstallButtons(); toast("앱을 설치했어요! 홈 화면에서 열 수 있어요 🎉"); });
+for (const b of document.querySelectorAll(".install-btn")) b.onclick = installApp;
+updateInstallButtons();
+
+async function installApp() {
+  if (installPrompt) {
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    installPrompt = null;
+    if (outcome === "accepted") updateInstallButtons();
+    return;
+  }
+  // 바로 설치 창을 띄울 수 없는 브라우저 → 방법 안내
+  const ua = navigator.userAgent;
+  const iOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const samsung = /SamsungBrowser/.test(ua);
+  const kakao = /KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\//i.test(ua);
+  let steps;
+  if (kakao) steps = ["지금은 카카오톡 같은 앱 안의 브라우저라서 설치할 수 없어요.", "오른쪽 아래(또는 위) <b>⋮ 메뉴 → '다른 브라우저로 열기'</b>를 누른 뒤, 크롬이나 사파리에서 다시 설치해 주세요."];
+  else if (iOS) steps = ["<b>Safari</b>로 이 사이트를 열어 주세요. (다른 브라우저에서는 메뉴에 '홈 화면에 추가'가 있으면 그걸 눌러도 돼요)", "아래쪽(아이패드는 위쪽)의 <b>공유 버튼</b> <span class='kbd'>⬆</span> 을 눌러요.", "<b>'홈 화면에 추가'</b>를 누르고, 오른쪽 위 <b>'추가'</b>를 눌러요."];
+  else if (samsung) steps = ["아래쪽 <b>≡ 메뉴</b>를 눌러요.", "<b>'현재 페이지 추가' → '홈 화면'</b> (또는 '앱 설치')을 눌러요."];
+  else steps = ["주소창 오른쪽의 <b>설치 아이콘</b> <span class='kbd'>⊕</span> 또는 <span class='kbd'>📲</span> 을 눌러요.", "아이콘이 없으면 오른쪽 위 <b>⋮ 메뉴 → '앱 설치'</b> 또는 <b>'홈 화면에 추가'</b>를 눌러요.", "설치 창에서 <b>'설치'</b>를 눌러요."];
+  $("install-steps").innerHTML = "<ol>" + steps.map((t) => `<li>${t}</li>`).join("") + "</ol>"
+    + "<p class='hint'>설치하면 홈 화면(바탕화면)에 💬 아이콘이 생기고, 일반 앱처럼 전체 화면으로 열려요.</p>";
+  $("install-dialog").showModal();
+}
+
+// ---------- 대화상자 공통 ----------
+for (const d of document.querySelectorAll("dialog")) {
+  d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-close]")) d.close(); });
 }
 
 // ---------- 유틸 ----------

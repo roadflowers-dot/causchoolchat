@@ -2,7 +2,7 @@
 // 주소 끝에 ?demo 를 붙이면 언제든 데모 모드로 볼 수 있어요.
 export function createDemoBackend() {
   const PAGE_SIZE = 10;
-  const me = { uid: "me", name: "김학생", email: "student@example.com", photo: "" };
+  const me = { uid: "me", name: "김학생", email: "student@example.com", photo: "", isAdmin: true }; // 데모에서는 관리자 화면도 확인 가능
   const friend = { uid: "u2", name: "이친구", photo: "" };
   const t = (min) => new Date(Date.now() - min * 60000);
   const mk = (id, who, min, extra) => ({ id, uid: who.uid, name: who.name, photo: "", createdAt: t(min), ...extra });
@@ -10,7 +10,7 @@ export function createDemoBackend() {
   let user = null;
   let authCb = () => {};
   const rooms = [
-    { id: "r1", name: "2학년 3반" },
+    { id: "r1", name: "2학년 3반", notice: { text: "내일은 현장체험학습! 8시 40분까지 운동장에 모여요 🚌" } },
     { id: "r2", name: "과학 동아리" },
     { id: "r3", name: "수행평가 조별과제" },
   ];
@@ -28,6 +28,16 @@ export function createDemoBackend() {
     r3: [],
   };
   const blobs = { f1: new Blob(["데모 파일입니다."], { type: "text/plain" }) };
+  const users = {
+    me: { name: me.name, email: me.email, photo: "", admin: true },
+    u2: { name: friend.name, email: "friend@example.com", photo: "", nickname: "이친구", avatar: "emoji:🐶" },
+    u3: { name: "박하늘", email: "sky@example.com", photo: "", avatar: "emoji:🦄" },
+  };
+  const banned = new Set();
+  const userSubs = new Set(), banSubs = new Set();
+  const emitUsers = () => userSubs.forEach((cb) => cb(structuredClone(users)));
+  const emitBans = () => banSubs.forEach((cb) => cb(new Set(banned)));
+  let myName = null;
   const roomSubs = new Set();
   const msgSubs = new Map(); // roomId -> Set(cb)
 
@@ -43,7 +53,7 @@ export function createDemoBackend() {
   const emitRooms = () => roomSubs.forEach((cb) => cb(roomView()));
   const emitMsgs = (roomId) => { (msgSubs.get(roomId) || []).forEach((cb) => cb(roomId)); emitRooms(); };
   const push = (roomId, m, who = me) => {
-    (messages[roomId] ||= []).push({ id: crypto.randomUUID(), uid: who.uid, name: who.name, photo: "", createdAt: new Date(), ...m });
+    (messages[roomId] ||= []).push({ id: crypto.randomUUID(), uid: who.uid, name: who === me ? (myName || me.name) : who.name, photo: "", createdAt: new Date(), ...m });
     emitMsgs(roomId);
   };
   const sub = (roomId, cb) => {
@@ -96,6 +106,17 @@ export function createDemoBackend() {
       if (m.reactions[me.uid] === emoji) delete m.reactions[me.uid]; else m.reactions[me.uid] = emoji;
       emitMsgs(roomId);
     },
+    listenUsers(cb) { userSubs.add(cb); cb(structuredClone(users)); return () => userSubs.delete(cb); },
+    listenMyBan(cb) { cb(false); return () => {}; },
+    setMyName(name) { myName = name || null; },
+    async updateProfile({ nickname, avatar }) { Object.assign(users.me, { nickname, avatar }); emitUsers(); },
+    listenBanned(cb) { banSubs.add(cb); cb(new Set(banned)); return () => banSubs.delete(cb); },
+    async ban(uid) { banned.add(uid); emitBans(); },
+    async unban(uid) { banned.delete(uid); emitBans(); },
+    async renameRoom(roomId, name) { rooms.find((r) => r.id === roomId).name = name; emitRooms(); },
+    async setNotice(roomId, text) { rooms.find((r) => r.id === roomId).notice = text ? { text } : undefined; emitRooms(); },
+    async deleteRoom(roomId) { rooms.splice(rooms.findIndex((r) => r.id === roomId), 1); delete messages[roomId]; emitRooms(); },
+
     async getFileBlob(roomId, file) {
       if (!blobs[file.id]) throw new Error("삭제된 파일이에요.");
       return blobs[file.id];

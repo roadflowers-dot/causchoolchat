@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "중대부초 실시간 채팅방",
+  "short_name": "중대부초 채팅",
+  "description": "중대부초 학생들을 위한 실시간 채팅방",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f5fa",
+  "theme_color": "#3b6cf6",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

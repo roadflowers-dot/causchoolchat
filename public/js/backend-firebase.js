@@ -8,7 +8,7 @@ const {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`);
 const {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, query, orderBy, limit, startAfter,
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, limit, startAfter,
   onSnapshot, serverTimestamp, writeBatch, deleteField, Bytes,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
 
@@ -26,6 +26,8 @@ export function createFirebaseBackend(config, { allowedDomain }) {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account", ...(allowedDomain ? { hd: allowedDomain } : {}) });
 
+  let myName = null; // 닉네임을 정하면 그 이름으로 메시지를 보냄
+  const nameOf = (u) => myName || u.displayName;
   const toUser = (u) => u && { uid: u.uid, name: u.displayName, email: u.email, photo: u.photoURL };
   // 아직 서버에 저장 중인 메시지도 시간이 보이도록 'estimate' 사용
   const toMsg = (d) => {
@@ -39,11 +41,11 @@ export function createFirebaseBackend(config, { allowedDomain }) {
   function addMessage(batch, roomId, data, previewText) {
     const u = auth.currentUser;
     batch.set(doc(messagesCol(roomId)), {
-      ...data, uid: u.uid, name: u.displayName, photo: u.photoURL, createdAt: serverTimestamp(),
+      ...data, uid: u.uid, name: nameOf(u), photo: u.photoURL, createdAt: serverTimestamp(),
     });
     batch.update(doc(db, "rooms", roomId), {
       lastMessageAt: serverTimestamp(),
-      lastMessage: { uid: u.uid, name: u.displayName, text: preview(previewText) },
+      lastMessage: { uid: u.uid, name: nameOf(u), text: preview(previewText) },
     });
   }
 
@@ -57,12 +59,14 @@ export function createFirebaseBackend(config, { allowedDomain }) {
           cb(null, `@${allowedDomain} 계정만 사용할 수 있습니다.`);
           return;
         }
-        if (u) {
-          setDoc(doc(db, "users", u.uid), {
-            name: u.displayName, email: u.email, photo: u.photoURL, lastSeen: serverTimestamp(),
-          }, { merge: true }).catch(console.warn);
-        }
-        cb(toUser(u));
+        if (!u) return cb(null);
+        const user = toUser(u);
+        // 관리자 확인: 관리자만 읽을 수 있는 문서를 읽어 봄 (관리자 이메일은 보안 규칙에만 있음)
+        user.isAdmin = await getDoc(doc(db, "admin", "check")).then(() => true, () => false);
+        cb(user);
+        setDoc(doc(db, "users", u.uid), {
+          name: u.displayName, email: u.email, photo: u.photoURL, admin: user.isAdmin, lastSeen: serverTimestamp(),
+        }, { merge: true }).catch(console.warn); // 차단된 사용자는 실패 (정상)
       });
     },
     signIn: () => signInWithPopup(auth, provider),
@@ -73,7 +77,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       return onSnapshot(q, (snap) => cb(snap.docs.map((d) => {
         const r = d.data({ serverTimestamps: "estimate" });
         return { id: d.id, ...r, lastMessageAt: r.lastMessageAt?.toDate() ?? null };
-      })));
+      })), console.warn);
     },
     createRoom(name) {
       const u = auth.currentUser;
@@ -83,7 +87,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     // 최근 메시지 PAGE_SIZE개를 실시간으로
     listenMessages(roomId, cb) {
       const q = query(messagesCol(roomId), orderBy("createdAt", "desc"), limit(PAGE_SIZE));
-      return onSnapshot(q, (snap) => cb(snap.docs.map(toMsg).reverse()));
+      return onSnapshot(q, (snap) => cb(snap.docs.map(toMsg).reverse()), console.warn);
     },
     // 그보다 오래된 메시지 PAGE_SIZE개를 한 번만 불러오기 ("이전 메시지 더 보기")
     async loadOlder(roomId, oldest) {
@@ -93,7 +97,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     },
     listenFiles(roomId, cb) {
       const q = query(collection(db, "rooms", roomId, "files"), orderBy("createdAt", "desc"), limit(FILE_LIST_LIMIT));
-      return onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
+      return onSnapshot(q, (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
     },
 
     async sendText(roomId, text, replyTo) {
@@ -119,7 +123,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
 
       const meta = { name: file.name, size: file.size, contentType: file.type || "application/octet-stream" };
       const batch = writeBatch(db);
-      batch.set(fileRef, { ...meta, chunkCount, uid: u.uid, uploaderName: u.displayName, createdAt: serverTimestamp() });
+      batch.set(fileRef, { ...meta, chunkCount, uid: u.uid, uploaderName: nameOf(u), createdAt: serverTimestamp() });
       addMessage(batch, roomId, { type: "file", file: { id: fileRef.id, ...meta }, ...(replyTo ? { replyTo } : {}) }, "📎 " + file.name);
       await batch.commit();
       onProgress?.(1);
@@ -147,6 +151,50 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       return updateDoc(doc(messagesCol(roomId), msg.id), {
         [`reactions.${uid}`]: current === emoji ? deleteField() : emoji,
       });
+    },
+
+    // ----- 프로필 -----
+    listenUsers(cb) {
+      return onSnapshot(collection(db, "users"), (snap) => {
+        cb(Object.fromEntries(snap.docs.map((d) => [d.id, d.data()])));
+      }, console.warn);
+    },
+    // 내가 차단됐는지 실시간 확인
+    listenMyBan(cb) {
+      return onSnapshot(doc(db, "banned", auth.currentUser.uid), (d) => cb(d.exists()), () => cb(false));
+    },
+    setMyName(name) { myName = name || null; },
+    updateProfile({ nickname, avatar }) {
+      return setDoc(doc(db, "users", auth.currentUser.uid), { nickname, avatar }, { merge: true });
+    },
+
+    // ----- 관리자 -----
+    listenBanned(cb) {
+      return onSnapshot(collection(db, "banned"), (snap) => cb(new Set(snap.docs.map((d) => d.id))), console.warn);
+    },
+    ban(uid) { return setDoc(doc(db, "banned", uid), { by: auth.currentUser.uid, at: serverTimestamp() }); },
+    unban(uid) { return deleteDoc(doc(db, "banned", uid)); },
+    renameRoom(roomId, name) { return updateDoc(doc(db, "rooms", roomId), { name }); },
+    setNotice(roomId, text) {
+      return updateDoc(doc(db, "rooms", roomId), { notice: text ? { text, at: serverTimestamp() } : deleteField() });
+    },
+    // 방 삭제: 메시지·파일·파일 조각을 모두 지운 뒤 방을 지움 (Firestore는 하위 데이터를 자동으로 지우지 않음)
+    async deleteRoom(roomId) {
+      const refs = [];
+      const msgs = await getDocs(messagesCol(roomId));
+      msgs.forEach((d) => refs.push(d.ref));
+      const files = await getDocs(collection(db, "rooms", roomId, "files"));
+      for (const f of files.docs) {
+        const chunks = await getDocs(collection(f.ref, "chunks"));
+        chunks.forEach((c) => refs.push(c.ref));
+        refs.push(f.ref);
+      }
+      for (let i = 0; i < refs.length; i += 400) {
+        const batch = writeBatch(db);
+        refs.slice(i, i + 400).forEach((r) => batch.delete(r));
+        await batch.commit();
+      }
+      await deleteDoc(doc(db, "rooms", roomId));
     },
 
     // 조각들을 읽어 원래 파일(Blob)로 합치기

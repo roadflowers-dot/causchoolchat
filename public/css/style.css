@@ -124,11 +124,100 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .room-list li.unread .room-preview { color: var(--text); }
 .unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--unread); flex: none; }
 
-.me { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.me { display: flex; align-items: center; gap: 6px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); }
+.me-profile {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left;
+  border: 0; background: transparent; padding: 6px; border-radius: 12px;
+}
+.me-profile:hover { background: var(--panel-2); }
 .avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--border); object-fit: cover; flex: none; }
-.me-info { flex: 1; min-width: 0; }
-.me-name { font-weight: 600; font-size: 14px; }
-.me-email { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.emoji-avatar { display: inline-grid; place-items: center; font-size: 19px; line-height: 1; }
+.me-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.me-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-edit { color: var(--muted); font-size: 12px; }
+.admin-badge, .banned-badge {
+  display: inline-block; font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 6px;
+  margin-left: 5px; vertical-align: 1px; background: #fff1c2; color: #8a6100;
+}
+.banned-badge { background: #ffe0e0; color: #b42318; }
+
+/* ---------- 앱 설치 버튼 ---------- */
+.install-btn {
+  border: 0; background: linear-gradient(135deg, #5c84ff, #3458e6); color: #fff; font-weight: 700;
+  border-radius: 12px; padding: 11px 14px; font-size: 14px; box-shadow: 0 4px 14px rgba(59, 108, 246, .3);
+}
+.install-btn:hover { filter: brightness(1.07); }
+.sidebar-install { margin: 8px 12px; }
+.login-install { width: 100%; margin-top: 12px; }
+
+/* ---------- 공지 ---------- */
+.notice {
+  display: flex; gap: 8px; align-items: flex-start; padding: 9px 16px; font-size: 14px; line-height: 1.45;
+  background: #fff8e1; color: #6b4e00; border-bottom: 1px solid #f3e2a9;
+}
+.notice-text { white-space: pre-wrap; word-break: break-word; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .notice { background: #2e2a1c; color: #f2d98b; border-color: #3d3725; } }
+:root[data-theme="dark"] .notice { background: #2e2a1c; color: #f2d98b; border-color: #3d3725; }
+
+/* ---------- 방 관리 메뉴 ---------- */
+.menu-wrap { position: relative; }
+.popup-menu {
+  position: absolute; right: 0; top: 42px; z-index: 20; min-width: 170px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+}
+.popup-menu button { border: 0; background: transparent; text-align: left; padding: 9px 12px; border-radius: 8px; font-size: 14px; }
+.popup-menu button:hover { background: var(--panel-2); }
+.popup-menu .danger, .pill-btn.danger { color: var(--danger); }
+.pill-btn.danger:hover { border-color: var(--danger); }
+
+/* ---------- 대화상자 ---------- */
+.dialog {
+  border: 0; padding: 0; border-radius: 18px; background: var(--panel); color: var(--text);
+  width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-shadow: var(--shadow);
+}
+.dialog.wide { width: min(560px, calc(100vw - 32px)); }
+.dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.dialog-body { padding: 22px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100dvh - 32px); }
+.dialog h3 { margin: 0; font-size: 18px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.primary-btn { border: 0; background: var(--primary); color: #fff; font-weight: 600; padding: 9px 18px; border-radius: 10px; }
+.primary-btn:hover { background: var(--primary-hover); }
+.primary-btn:disabled { opacity: .6; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.field input, .search {
+  font: inherit; font-size: 15px; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+}
+.field input:focus, .search:focus { outline: none; border-color: var(--primary); }
+.profile-preview { display: flex; justify-content: center; }
+.profile-preview .avatar { width: 84px; height: 84px; }
+.profile-preview .emoji-avatar { font-size: 46px; }
+.avatar-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.avatar-options .pill-btn { cursor: pointer; }
+.emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; }
+.emoji-choice { border: 2px solid transparent; background: var(--panel-2); border-radius: 10px; font-size: 22px; aspect-ratio: 1; padding: 0; }
+.emoji-choice.selected { border-color: var(--primary); background: var(--primary-soft); }
+@media (max-width: 420px) { .emoji-grid { grid-template-columns: repeat(6, 1fr); } }
+
+.user-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 120px; flex: 1; }
+.user-list li { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.user-list li.banned { opacity: .75; }
+.user-info { flex: 1; min-width: 0; }
+.user-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-real { font-weight: 400; color: var(--muted); }
+.user-email { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.install-steps ol { margin: 0; padding-left: 20px; line-height: 1.7; }
+.install-steps li { margin-bottom: 6px; }
+.install-steps .hint { margin-top: 10px; }
+.kbd { display: inline-block; border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; background: var(--panel-2); }
+
+/* 앱으로 설치해서 열었을 때 (상단 상태바 영역 여백) */
+@media (display-mode: standalone) {
+  .room-header, .sidebar-header { padding-top: calc(12px + env(safe-area-inset-top)); }
+}
 
 .room { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 .room-header {

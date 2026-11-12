@@ -13,6 +13,10 @@
   (사이트가 열려 있을 때만 알림이 와요. 무료 요금제에서는 앱을 닫은 상태의 푸시 알림은 불가)
 - 파일 공유 (5MB까지), 이미지 미리보기, 📎 파일함
 - **다크 모드** (기기 설정 자동 적용 + 🌙/☀️ 버튼으로 전환)
+- **프로필 수정**: 왼쪽 아래 내 이름 → 닉네임, 프로필 사진(구글 사진 / 이모지 / 사진 올리기)
+- **앱 설치 (PWA)**: 📲 앱으로 설치하기 버튼 → 홈 화면·바탕화면에 아이콘, 전체 화면으로 실행
+- **관리자 모드** (관리자 이메일로 로그인하면 자동): 👑 사용자 차단/해제, 모든 메시지 삭제,
+  ⋯ 메뉴로 공지 고정·방 이름 변경·방 삭제. 관리자 이메일은 `firestore.rules`의 `isAdmin()`에서 바꿔요.
 - 주소 끝에 `?demo`를 붙이면 실제 데이터에 영향 없는 연습 화면
 
 ## 구성
@@ -58,7 +62,9 @@ firestore.rules            DB 보안 규칙
 
 ```
 users/{uid}                          name, email, photo, lastSeen
-rooms/{roomId}                       name, createdBy, createdAt, lastMessageAt, lastMessage{uid,name,text}
+users/{uid}                          name, email, photo, nickname, avatar("emoji:🐶" | data:image/jpeg...), admin
+banned/{uid}                         by, at   (관리자만 추가/삭제)
+rooms/{roomId}                       name, createdBy, createdAt, lastMessageAt, lastMessage{uid,name,text}, notice{text}
 rooms/{roomId}/messages/{msgId}      type("text"|"file"), text, file{id,name,size,contentType},
                                      replyTo{id,name,text}, reactions{uid: 이모지},
                                      uid, name, photo, createdAt
