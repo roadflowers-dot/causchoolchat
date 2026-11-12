@@ -185,10 +185,6 @@
           <textarea id="invite-input" rows="2" placeholder="친구@gmail.com&#10;여러 명은 쉼표나 줄바꿈으로 구분해요" autocomplete="off"></textarea>
           <button type="submit" class="primary-btn">초대하기</button>
         </form>
-        <div class="invite-options">
-          <label class="check"><input type="checkbox" id="invite-send" checked /> 📧 초대 메일도 내 Gmail로 바로 보내기</label>
-          <button type="button" id="gmail-help" class="text-btn">메일 발송 설정 방법</button>
-        </div>
         <div class="invite-tools">
           <span class="hint">초대한 사람 <b id="invite-count">0</b>명</span>
           <button type="button" id="invite-copy" class="pill-btn">📋 초대 문구 복사</button>
@@ -209,36 +205,6 @@
 
       <div class="dialog-actions">
         <button type="button" class="primary-btn" data-close>닫기</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- Gmail 발송 설정 안내 -->
-  <dialog id="gmail-dialog" class="dialog wide">
-    <div class="dialog-body">
-      <h3>📧 Gmail로 초대 메일 보내기 설정</h3>
-      <p id="gmail-reason" class="gmail-reason"></p>
-      <ol class="setup-steps">
-        <li>
-          <b>Gmail API 켜기</b> (처음 한 번)<br />
-          <a data-gcp="https://console.cloud.google.com/apis/library/gmail.googleapis.com?project=PROJECT" target="_blank" rel="noopener">이 링크</a>를 열고
-          (Firebase를 만든 구글 계정으로 로그인) 파란 <b>[사용]</b> 버튼을 눌러요.
-        </li>
-        <li>
-          <b>앱 공개 상태 확인</b> (처음 한 번)<br />
-          <a data-gcp="https://console.cloud.google.com/auth/audience?project=PROJECT" target="_blank" rel="noopener">이 링크</a>에서 게시 상태가
-          <b>'테스트 중'</b>이면 아래 <b>[+ Add users]</b>로 관리자 이메일을 추가해요. ('프로덕션'이면 그대로 두면 돼요)
-        </li>
-        <li>
-          <b>권한 허용</b> (메일 보낼 때 구글 창이 뜨면)<br />
-          관리자 계정 선택 → <b>'Google에서 확인하지 않은 앱'</b>이 나오면 <b>[고급] → [causchoolchat…(으)로 이동]</b> →
-          <b>'이메일 보내기' 체크박스를 꼭 체크</b> → [계속]
-        </li>
-      </ol>
-      <p class="hint">권한은 '메일 보내기'만이에요. 메일함은 읽을 수 없어요. 허용한 뒤 1시간 동안은 다시 묻지 않아요.</p>
-      <div class="dialog-actions">
-        <button type="button" id="gmail-fallback" class="text-btn">Gmail 작성창으로 대신 보내기</button>
-        <button type="button" class="primary-btn" data-close>확인</button>
       </div>
     </div>
   </dialog>
