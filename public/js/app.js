@@ -689,6 +689,15 @@ function clearReply() {
   if (editingMsg) { input.value = ""; autoGrow(); }
   replyTo = null; editingMsg = null; $("reply-bar").hidden = true;
 }
+// 보내기 실패 이유를 알기 쉽게 (서버 거부 / 인터넷 문제 구분)
+function sendErrorText(err) {
+  const code = err?.code || "";
+  if (code === "permission-denied")
+    return "서버가 거부했어요. 사이트가 업데이트됐을 수 있어요 → 새로고침(앱은 완전히 껐다 켜기) 해 주세요. 계속되면 관리자에게 알려 주세요.";
+  if (code === "unavailable" || code === "deadline-exceeded" || !navigator.onLine)
+    return "인터넷 연결이 불안정해서 보내지 못했어요. 잠시 뒤 다시 보내 주세요.";
+  return `보내지 못했어요 (${code || err?.message || "알 수 없는 오류"}). 새로고침 후 다시 해 주세요.`;
+}
 // 메시지 한 줄 미리보기 (답장 인용 등)
 function previewOf(m) {
   const t = m.type === "file" ? "📎 " + (m.file?.name || "파일") : m.type === "poll" ? "📊 " + m.poll.question : m.text || "";
@@ -748,7 +757,7 @@ $("composer").onsubmit = async (e) => {
     await backend.sendText(currentRoom.id, text, reply);
   } catch (err) {
     input.value = raw; autoGrow();
-    toast("보내지 못했어요. 인터넷 연결을 확인해 주세요.");
+    toast(sendErrorText(err));
   }
 };
 
@@ -916,7 +925,7 @@ $("file-input").onchange = async (e) => {
   try {
     await backend.sendFile(currentRoom.id, file, (p) => (bar.firstElementChild.style.width = p * 100 + "%"), reply);
   } catch (err) {
-    toast("업로드 실패: " + err.message);
+    toast(sendErrorText(err));
   } finally {
     bar.hidden = true;
     bar.firstElementChild.style.width = "0";
