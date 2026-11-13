@@ -492,3 +492,8 @@ body.guest #poll-btn, body.guest #typing { display: none !important; }
   .room-header .room-icon { display: none; }
   .messages { padding: 8px 12px 12px; }
 }
+
+/* reCAPTCHA 배지는 전송 버튼을 가려서 숨기고, 대신 로그인 화면에 안내 문구 표시 (구글 정책) */
+.grecaptcha-badge { visibility: hidden !important; }
+.recaptcha-note { font-size: 11px; color: var(--muted); margin-top: 18px !important; line-height: 1.5; }
+.recaptcha-note a { color: inherit; }

@@ -1,4 +1,4 @@
-import { firebaseConfig, ALLOWED_EMAIL_DOMAIN, MAX_FILE_MB } from "./firebase-config.js";
+import { firebaseConfig, ALLOWED_EMAIL_DOMAIN, MAX_FILE_MB, APPCHECK_SITE_KEY } from "./firebase-config.js";
 
 const SITE_TITLE = "중대부초 실시간 채팅방";
 const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🎉"];
@@ -12,7 +12,7 @@ let backend;
 try {
   backend = isDemo
     ? (await import("./backend-demo.js")).createDemoBackend()
-    : (await import("./backend-firebase.js")).createFirebaseBackend(firebaseConfig, { allowedDomain: ALLOWED_EMAIL_DOMAIN });
+    : (await import("./backend-firebase.js")).createFirebaseBackend(firebaseConfig, { allowedDomain: ALLOWED_EMAIL_DOMAIN, appCheckSiteKey: APPCHECK_SITE_KEY });
 } catch (err) {
   // Firebase 라이브러리를 못 불러오면(네트워크 차단 등) 빈 화면 대신 안내 표시
   document.body.innerHTML = `<p style="margin:auto;padding:24px;text-align:center">

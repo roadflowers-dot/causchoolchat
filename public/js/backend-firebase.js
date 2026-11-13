@@ -11,6 +11,7 @@ const {
   getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, limit, startAfter, where,
   onSnapshot, serverTimestamp, writeBatch, deleteField, Bytes,
 } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`);
+const { initializeAppCheck, ReCaptchaV3Provider } = await import(`https://www.gstatic.com/firebasejs/${V}/firebase-app-check.js`);
 
 // Firestore 문서 1개 최대 1MiB → 여유 있게 900KB씩 나눠 저장
 const CHUNK_SIZE = 900 * 1024;
@@ -18,8 +19,13 @@ const CHUNK_SIZE = 900 * 1024;
 export const PAGE_SIZE = 50;
 const FILE_LIST_LIMIT = 30;
 
-export function createFirebaseBackend(config, { allowedDomain }) {
+export function createFirebaseBackend(config, { allowedDomain, appCheckSiteKey }) {
   const app = initializeApp(config);
+  // App Check: 요청마다 "진짜 우리 사이트에서 왔다"는 증명서를 붙임 (복사한 사이트·프로그램은 못 받음)
+  // 다른 Firebase 기능보다 먼저 켜야 해요
+  if (appCheckSiteKey) {
+    initializeAppCheck(app, { provider: new ReCaptchaV3Provider(appCheckSiteKey), isTokenAutoRefreshEnabled: true });
+  }
   const auth = getAuth(app);
   const db = getFirestore(app);
 

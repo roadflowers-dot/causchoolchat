@@ -17,3 +17,7 @@ export const ALLOWED_EMAIL_DOMAIN = "";
 // 파일 업로드 최대 크기 (MB)
 // 무료 요금제의 Firestore 저장 용량은 총 1GiB라서 작게 유지하세요. (firestore.rules의 청크 개수 제한과 맞춰야 함)
 export const MAX_FILE_MB = 5;
+
+// Firebase App Check (reCAPTCHA v3) 사이트 키 — 진짜 우리 사이트에서 온 요청만 받도록 확인
+// 비어 있으면 App Check를 쓰지 않아요. (사이트 키는 공개용이라 여기에 넣어도 괜찮아요. '비밀 키'는 넣지 마세요!)
+export const APPCHECK_SITE_KEY = "";
