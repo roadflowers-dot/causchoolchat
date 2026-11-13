@@ -26,8 +26,6 @@ export function createFirebaseBackend(config, { allowedDomain }) {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: "select_account", ...(allowedDomain ? { hd: allowedDomain } : {}) });
 
-  let myName = null; // 닉네임을 정하면 그 이름으로 메시지를 보냄
-  const nameOf = (u) => myName || u.displayName;
   const toUser = (u) => u && { uid: u.uid, name: u.displayName, email: u.email, photo: u.photoURL };
   // 아직 서버에 저장 중인 메시지도 시간이 보이도록 'estimate' 사용
   const toMsg = (d) => {
@@ -42,12 +40,11 @@ export function createFirebaseBackend(config, { allowedDomain }) {
   // 메시지 저장 + 채팅방 '마지막 메시지' 갱신(목록 미리보기·안 읽음 표시용)을 한 번에
   function addMessage(batch, roomId, data, previewText) {
     const u = auth.currentUser;
-    batch.set(doc(messagesCol(roomId)), {
-      ...data, uid: u.uid, name: nameOf(u), photo: u.photoURL, createdAt: serverTimestamp(),
-    });
+    // 이름·사진은 메시지에 넣지 않음 (서버가 거부). 화면은 uid로 프로필을 찾아 이름을 보여줌
+    batch.set(doc(messagesCol(roomId)), { ...data, uid: u.uid, createdAt: serverTimestamp() });
     batch.update(doc(db, top(roomId), roomId), {
       lastMessageAt: serverTimestamp(),
-      lastMessage: { uid: u.uid, name: nameOf(u), text: preview(previewText) },
+      lastMessage: { uid: u.uid, text: preview(previewText) },
     });
   }
 
@@ -69,7 +66,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
         cb(user);
         // 프로필에는 이메일을 넣지 않음 (다른 학생에게 보이지 않게). 이메일은 본인·관리자만 보는 곳에 따로 저장
         setDoc(doc(db, "users", u.uid), {
-          name: (u.displayName || "").slice(0, 100), photo: u.photoURL || null, admin: user.isAdmin,
+          name: u.displayName || "", photo: u.photoURL || null, admin: user.isAdmin, // 구글이 확인한 값 그대로
           lastSeen: serverTimestamp(), email: deleteField(),
         }, { merge: true })
           .then(() => setDoc(doc(db, "emails", u.uid), { email: u.email }))
@@ -162,7 +159,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
 
       const meta = { name: file.name, size: file.size, contentType: file.type || "application/octet-stream" };
       const batch = writeBatch(db);
-      batch.set(fileRef, { ...meta, chunkCount, uid: u.uid, uploaderName: nameOf(u), createdAt: serverTimestamp() });
+      batch.set(fileRef, { ...meta, chunkCount, uid: u.uid, createdAt: serverTimestamp() });
       // 저장 공간 관리용 목록 (크기·날짜만, 이름 없음)
       batch.set(doc(db, "fileIndex", fileRef.id), {
         kind: top(roomId), roomId, size: file.size, chunkCount, uid: u.uid, at: serverTimestamp(),
@@ -368,7 +365,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     listenMyBan(cb) {
       return onSnapshot(doc(db, "banned", auth.currentUser.uid), (d) => cb(d.exists()), () => cb(false));
     },
-    setMyName(name) { myName = name || null; },
+    setMyName() {}, // (예전 버전 호환용) 이제 메시지에 이름을 넣지 않음
     updateProfile({ nickname, avatar }) {
       return setDoc(doc(db, "users", auth.currentUser.uid), { nickname, avatar }, { merge: true });
     },

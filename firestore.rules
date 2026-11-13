@@ -30,16 +30,15 @@ service cloud.firestore {
     function chunkBytes() { return 900 * 1024; }
     function reactionEmojis() { return ['👍', '❤️', '😂', '😮', '😢', '🎉']; }
 
-    // 메시지에 붙는 이름·사진 칸 크기 제한
-    function validSender(d) {
-      return (!('name' in d) || d.name == null || (d.name is string && d.name.size() <= 100))
-        && (!('photo' in d) || d.photo == null || (d.photo is string && d.photo.size() <= 1000));
-    }
+    // 메시지에는 이름·사진을 넣지 못함 → 화면은 항상 서버가 확인한 프로필(uid)로 이름을 보여줌 (이름 위장 불가)
+    function noSenderFields(d) { return !('name' in d) && !('photo' in d); }
     function validText(t) { return t is string && t.size() > 0 && t.size() <= 2000; }
-    function validReply(d) {
+    // 답장: 원래 메시지 번호와 그 글쓴이(uid)만 저장. 서버가 원래 메시지를 직접 확인 (인용 위장 불가)
+    function validReply(d, replyDocPath) {
       return !('replyTo' in d)
-        || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
-            && d.replyTo.text is string && d.replyTo.text.size() <= 120);
+        || (d.replyTo.keys().hasOnly(['id', 'uid'])
+            && d.replyTo.id is string && d.replyTo.uid is string
+            && get(replyDocPath).data.uid == d.replyTo.uid);
     }
     // 투표: 질문 1~200자, 선택지 2~6개 (각 1~50자)
     function optOk(o, i) { return i >= o.size() || (o[i] is string && o[i].size() >= 1 && o[i].size() <= 50); }
@@ -51,12 +50,12 @@ service cloud.firestore {
         && optOk(p.options, 3) && optOk(p.options, 4) && optOk(p.options, 5);
     }
 
-    // 새 메시지 (fileDocPath: 첨부 파일 정보 문서 경로)
-    function validNewMessage(fileDocPath) {
+    // 새 메시지 (fileDocPath: 첨부 파일 정보 문서 경로, replyDocPath: 답장하는 원래 메시지 경로)
+    function validNewMessage(fileDocPath, replyDocPath) {
       let d = request.resource.data;
       return d.uid == request.auth.uid
         && !('reactions' in d) && !('votes' in d) && !('closed' in d) && !('editedAt' in d)
-        && validReply(d) && validSender(d)
+        && validReply(d, replyDocPath) && noSenderFields(d)
         && (
           (d.type == 'text' && validText(d.text))
           || (d.type == 'file' && getAfter(fileDocPath).data.uid == request.auth.uid)
@@ -97,14 +96,15 @@ service cloud.firestore {
       let d = request.resource.data;
       return changed().hasOnly(['lastMessageAt', 'lastMessage'])
         && d.lastMessageAt == request.time
-        && d.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
+        && d.lastMessage.keys().hasOnly(['uid', 'text'])
         && d.lastMessage.uid == request.auth.uid
         && d.lastMessage.text is string && d.lastMessage.text.size() <= 100;
     }
 
     function validFileMeta() {
       let d = request.resource.data;
-      return d.uid == request.auth.uid
+      return d.keys().hasOnly(['name', 'size', 'contentType', 'chunkCount', 'uid', 'createdAt'])
+        && d.uid == request.auth.uid
         && d.name is string && d.name.size() <= 200
         && d.size is int && d.size <= maxFileBytes()
         && d.chunkCount is int && d.chunkCount >= 1 && d.chunkCount <= maxChunks();
@@ -193,9 +193,13 @@ service cloud.firestore {
     match /users/{uid} {
       function validProfile(d) {
         return d.keys().hasOnly(['name', 'photo', 'lastSeen', 'nickname', 'avatar', 'admin'])
-          && validSender(d)
+          // 실제 이름·구글 사진은 구글이 확인한 값과 같아야 함 (다른 사람 이름으로 위장 불가)
+          && d.get('name', '') == request.auth.token.get('name', '')
+          && d.get('photo', null) == request.auth.token.get('picture', null)
           && d.get('admin', false) == isAdmin()
-          && (!('nickname' in d) || (d.nickname is string && d.nickname.size() >= 1 && d.nickname.size() <= 20))
+          && (!('nickname' in d) || (d.nickname is string && d.nickname.size() >= 1 && d.nickname.size() <= 20
+              // '관리자', '선생님' 같은 닉네임은 관리자만
+              && (isAdmin() || !d.nickname.lower().matches('.*(관리자|선생님|운영자|admin|teacher).*'))))
           && (!('avatar' in d) || (d.avatar is string && d.avatar.size() <= 60000
               && (d.avatar == '' || d.avatar.matches('^(emoji:.{1,16}|data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+)$'))));
       }
@@ -252,7 +256,9 @@ service cloud.firestore {
 
       match /messages/{msgId} {
         allow read: if canSee();
-        allow create: if canSee() && validNewMessage(fileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')));
+        allow create: if canSee() && validNewMessage(
+          fileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')),
+          /databases/$(database)/documents/rooms/$(roomId)/messages/$(request.resource.data.get('replyTo', {'id': 'none'}).get('id', 'none')));
         allow update: if canSee() && validMessageUpdate();
         allow delete: if canSee() && (resource.data.uid == request.auth.uid || isAdmin());
       }
@@ -304,7 +310,9 @@ service cloud.firestore {
 
       match /messages/{msgId} {
         allow read: if inDm();
-        allow create: if inDm() && validNewMessage(dmFileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')));
+        allow create: if inDm() && validNewMessage(
+          dmFileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')),
+          /databases/$(database)/documents/dms/$(dmId)/messages/$(request.resource.data.get('replyTo', {'id': 'none'}).get('id', 'none')));
         allow update: if inDm() && validMessageUpdate();
         allow delete: if inDm() && resource.data.uid == request.auth.uid;
       }

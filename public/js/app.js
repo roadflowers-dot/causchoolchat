@@ -561,8 +561,12 @@ function messageEl(m, grouped) {
     body.append(meta);
   }
   if (m.replyTo) {
+    // 인용은 저장된 글자를 믿지 않고, 원래 메시지를 찾아서 보여줌 (서버가 원래 메시지·글쓴이를 확인함)
+    const orig = allMessages().find((x) => x.id === m.replyTo.id);
     const q = el("div", "quote");
-    q.append(el("b", null, m.replyTo.name), " " + maskBad(m.replyTo.text));
+    const who = displayName(m.replyTo.uid ?? orig?.uid, m.replyTo.name);
+    const text = orig ? previewOf(orig) : (m.replyTo.text != null ? maskBad(m.replyTo.text) : "이전 메시지 (눌러서 보기)");
+    q.append(el("b", null, who), " " + text);
     q.onclick = () => jumpTo(m.replyTo.id);
     body.append(q);
   }
@@ -673,10 +677,9 @@ function jumpTo(id) {
 // ---------- 답장 ----------
 function setReply(m) {
   editingMsg = null;
-  const preview = m.type === "file" ? "📎 " + m.file.name : m.type === "poll" ? "📊 " + m.poll.question : m.text;
-  replyTo = { id: m.id, name: displayName(m.uid, m.name), text: maskBad(preview).slice(0, 80) };
+  replyTo = { id: m.id, uid: m.uid }; // 원래 메시지 번호와 글쓴이만 (내용은 화면에서 원래 메시지로 보여줌)
   $("reply-label").textContent = `↩ ${m.uid === me?.uid ? "나" : displayName(m.uid, m.name)}에게 답장`;
-  $("reply-text").textContent = replyTo.text;
+  $("reply-text").textContent = previewOf(m);
   $("reply-bar").hidden = false;
   openActionsId = pickerId = null;
   renderMessages();
@@ -685,6 +688,11 @@ function setReply(m) {
 function clearReply() {
   if (editingMsg) { input.value = ""; autoGrow(); }
   replyTo = null; editingMsg = null; $("reply-bar").hidden = true;
+}
+// 메시지 한 줄 미리보기 (답장 인용 등)
+function previewOf(m) {
+  const t = m.type === "file" ? "📎 " + (m.file?.name || "파일") : m.type === "poll" ? "📊 " + m.poll.question : m.text || "";
+  return maskBad(t).slice(0, 80);
 }
 // ----- 내 메시지 수정 -----
 function startEdit(m) {
@@ -1083,6 +1091,7 @@ $("profile-form").onsubmit = async (e) => {
   e.preventDefault();
   const nickname = $("nickname-input").value.trim().slice(0, 20);
   if (!nickname) return toast("닉네임을 입력해 주세요");
+  if (!isAdmin() && /관리자|선생님|운영자|admin|teacher/i.test(nickname)) return toast("'관리자', '선생님' 같은 말은 닉네임에 쓸 수 없어요");
   $("profile-save").disabled = true;
   try {
     await backend.updateProfile({ nickname, avatar: draftAvatar });
