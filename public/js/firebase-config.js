@@ -20,4 +20,4 @@ export const MAX_FILE_MB = 5;
 
 // Firebase App Check (reCAPTCHA v3) 사이트 키 — 진짜 우리 사이트에서 온 요청만 받도록 확인
 // 비어 있으면 App Check를 쓰지 않아요. (사이트 키는 공개용이라 여기에 넣어도 괜찮아요. '비밀 키'는 넣지 마세요!)
-export const APPCHECK_SITE_KEY = "";
+export const APPCHECK_SITE_KEY = "6Lcyfx4uAAAAABgUbW28EKIxjn9zrPoizMS6vyuw";
