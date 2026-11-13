@@ -66,9 +66,13 @@ export function createFirebaseBackend(config, { allowedDomain }) {
         // 관리자 확인: 관리자만 읽을 수 있는 문서를 읽어 봄 (관리자 이메일은 보안 규칙에만 있음)
         user.isAdmin = await getDoc(doc(db, "admin", "check")).then(() => true, () => false);
         cb(user);
+        // 프로필에는 이메일을 넣지 않음 (다른 학생에게 보이지 않게). 이메일은 본인·관리자만 보는 곳에 따로 저장
         setDoc(doc(db, "users", u.uid), {
-          name: u.displayName, email: u.email, photo: u.photoURL, admin: user.isAdmin, lastSeen: serverTimestamp(),
-        }, { merge: true }).catch(console.warn); // 차단된 사용자는 실패 (정상)
+          name: (u.displayName || "").slice(0, 100), photo: u.photoURL || null, admin: user.isAdmin,
+          lastSeen: serverTimestamp(), email: deleteField(),
+        }, { merge: true })
+          .then(() => setDoc(doc(db, "emails", u.uid), { email: u.email }))
+          .catch(() => {}); // 등록 안 됐거나 차단된 사용자는 실패 (정상)
       });
     },
     signIn: () => signInWithPopup(auth, provider),
@@ -192,6 +196,25 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       }
     },
     uninvite(email) { return deleteDoc(doc(db, "invites", email.toLowerCase())); },
+
+    // ----- (관리자) 이메일 목록 -----
+    listenEmails(cb) {
+      return onSnapshot(collection(db, "emails"), (snap) => {
+        cb(Object.fromEntries(snap.docs.map((d) => [d.id, d.data().email])));
+      }, console.warn);
+    },
+    // 예전 버전에서 프로필에 저장된 이메일 칸 지우기
+    // entries: [[uid, email], ...] → 이메일 보관함에 옮겨 담고 프로필에서는 지움
+    async cleanupProfileEmails(entries) {
+      for (let i = 0; i < entries.length; i += 200) {
+        const batch = writeBatch(db);
+        for (const [uid, email] of entries.slice(i, i + 200)) {
+          batch.set(doc(db, "emails", uid), { email }, { merge: true });
+          batch.update(doc(db, "users", uid), { email: deleteField() });
+        }
+        await batch.commit();
+      }
+    },
 
     // ----- 외부 사람 입장 요청 -----
     // 등록 안 된 사람이 들어오면 자기 정보를 남김 (관리자에게 알림이 감)

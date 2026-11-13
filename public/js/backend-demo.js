@@ -140,6 +140,8 @@ export function createDemoBackend() {
     listenInvites(cb) { inviteSubs.add(cb); cb(new Map(invites)); return () => inviteSubs.delete(cb); },
     async invite(emails) { for (const e of emails) invites.set(e.toLowerCase(), {}); emitInvites(); },
     async uninvite(email) { invites.delete(email); emitInvites(); },
+    listenEmails(cb) { cb(Object.fromEntries(Object.entries(users).map(([uid, u]) => [uid, u.email]))); return () => {}; },
+    async cleanupProfileEmails() {},
     async requestEntry() { console.log("[데모] 입장 요청을 남김"); },
     listenPending(cb) { pendingSubs.add(cb); cb([...pending]); return () => pendingSubs.delete(cb); },
     async approvePending(p) { invites.set(p.email.toLowerCase(), {}); pending = pending.filter((x) => x.uid !== p.uid); emitInvites(); emitPending(); },

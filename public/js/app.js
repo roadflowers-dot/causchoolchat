@@ -39,6 +39,8 @@ let offDms = null, offMyInvite = null, offInvites = null;
 let access = { invited: null, banned: null };
 let pendingList = [], offPending = null, seenPending = null; // (관리자) 외부 사람 입장 요청
 let entryRequested = false;
+let emailsMap = {}, offEmails = null, emailCleanupDone = false; // (관리자) uid -> 이메일
+const emailOf = (uid) => emailsMap[uid] || users[uid]?.email || "";
 let firstRenderOfRoom = false;
 let users = {};         // uid -> { nickname, avatar, photo, name, email, admin }
 let bannedSet = new Set();
@@ -119,6 +121,15 @@ function startListening() {
   offUsers = backend.listenUsers((u) => {
     users = u;
     backend.setMyName(users[me.uid]?.nickname);
+    if (isAdmin() && !emailCleanupDone) {
+      // 예전 버전 데이터: 프로필에 남아 있는 이메일을 이메일 전용 보관함으로 옮긴 뒤 지움 (학생들에게 안 보이게)
+      const legacy = Object.entries(u).filter(([, x]) => x.email).map(([uid, x]) => [uid, emailsMap[uid] || x.email]);
+      if (legacy.length) {
+        emailCleanupDone = true;
+        for (const [uid, x] of Object.entries(u)) if (x.email && !emailsMap[uid]) emailsMap[uid] = x.email;
+        backend.cleanupProfileEmails(legacy).catch((e) => { emailCleanupDone = false; console.warn(e); });
+      }
+    }
     renderMe();
     renderRooms();
     if (currentRoom) { renderRoomHeader(); renderMessages(); }
@@ -129,10 +140,14 @@ function startListening() {
   if (isAdmin()) offInvites = backend.listenInvites((map) => { invitesMap = map; updatePendingUI(); if ($("admin-dialog").open) { renderInviteList(); renderUserList(); } });
   if (isAdmin()) offBanned = backend.listenBanned((set) => { bannedSet = set; updatePendingUI(); if ($("admin-dialog").open) renderUserList(); });
   if (isAdmin()) offPending = backend.listenPending(onPending);
+  if (isAdmin()) offEmails = backend.listenEmails((m) => {
+    emailsMap = m;
+    if ($("admin-dialog").open) { renderInviteList(); renderUserList(); }
+  });
 }
 function stopListening() {
-  for (const off of [offRooms, offDms, offMessages, offFiles, offUsers, offBanned, offInvites, offPending]) off?.();
-  offRooms = offDms = offMessages = offFiles = offUsers = offBanned = offInvites = offPending = null;
+  for (const off of [offRooms, offDms, offMessages, offFiles, offUsers, offBanned, offInvites, offPending, offEmails]) off?.();
+  offRooms = offDms = offMessages = offFiles = offUsers = offBanned = offInvites = offPending = offEmails = null;
   pendingList = []; seenPending = null;
   groupRooms = []; dmRooms = []; rooms = [];
   currentRoom = null;
@@ -971,18 +986,18 @@ $("invite-all").onclick = async () => {
   const missing = uninvitedUsers();
   if (!missing.length) return;
   if (!confirm(`지금까지 이 사이트를 쓴 ${missing.length}명을 초대 목록에 추가할까요?`)) return;
-  try { await backend.invite(missing.map((u) => u.email)); toast(`${missing.length}명을 초대 목록에 추가했어요`); }
+  try { await backend.invite(missing.map((u) => emailOf(u.uid))); toast(`${missing.length}명을 초대 목록에 추가했어요`); }
   catch (err) { toast("실패했어요: " + err.message); }
 };
 
 // 이미 사이트를 쓰고 있지만 초대 목록에 없는 사람 (초대 기능을 켜기 전에 가입한 사람)
 function uninvitedUsers() {
   return Object.entries(users)
-    .filter(([uid, u]) => !u.admin && u.email && !invitesMap.has(u.email.toLowerCase()))
+    .filter(([uid, u]) => !u.admin && emailOf(uid) && !invitesMap.has(emailOf(uid).toLowerCase()))
     .map(([uid, u]) => ({ uid, ...u }));
 }
 function userByEmail(email) {
-  return Object.entries(users).find(([, u]) => (u.email || "").toLowerCase() === email);
+  return Object.entries(users).find(([uid]) => emailOf(uid).toLowerCase() === email);
 }
 
 function renderInviteList() {
@@ -1022,7 +1037,7 @@ function renderUserList() {
   const q = $("user-search").value.trim().toLowerCase();
   const list = Object.entries(users)
     .map(([uid, u]) => ({ uid, ...u, display: displayName(uid, u.name) }))
-    .filter((u) => !q || u.display.toLowerCase().includes(q) || (u.email || "").toLowerCase().includes(q) || (u.name || "").toLowerCase().includes(q))
+    .filter((u) => !q || u.display.toLowerCase().includes(q) || emailOf(u.uid).toLowerCase().includes(q) || (u.name || "").toLowerCase().includes(q))
     .sort((a, b) => (bannedSet.has(b.uid) - bannedSet.has(a.uid)) || a.display.localeCompare(b.display, "ko"));
   const ul = $("user-list");
   ul.replaceChildren();
@@ -1036,19 +1051,20 @@ function renderUserList() {
     if (u.nickname && u.name && u.nickname !== u.name) nameLine.append(el("span", "user-real", ` (${u.name})`));
     if (u.admin) nameLine.append(el("span", "admin-badge", "관리자"));
     if (banned) nameLine.append(el("span", "banned-badge", "차단됨"));
-    const notInvited = !u.admin && u.email && !invitesMap.has(u.email.toLowerCase());
+    const email = emailOf(u.uid);
+    const notInvited = !u.admin && email && !invitesMap.has(email.toLowerCase());
     if (notInvited) nameLine.append(el("span", "banned-badge", "초대 안 됨"));
-    info.append(nameLine, el("div", "user-email", u.email || ""));
+    info.append(nameLine, el("div", "user-email", email));
     li.append(info);
     if (notInvited) {
       const inv = el("button", "pill-btn", "초대");
-      inv.onclick = async () => { try { await backend.invite([u.email]); toast("초대했어요"); } catch (e) { toast("실패했어요: " + e.message); } };
+      inv.onclick = async () => { try { await backend.invite([email]); toast("초대했어요"); } catch (e) { toast("실패했어요: " + e.message); } };
       li.append(inv);
     }
     if (u.uid !== me.uid && !u.admin) {
       const b = el("button", banned ? "pill-btn" : "pill-btn danger", banned ? "차단 해제" : "차단");
       b.onclick = async () => {
-        if (!banned && !confirm(`${u.display}(${u.email}) 님을 차단할까요?\n차단하면 채팅방을 보거나 메시지를 보낼 수 없어요.`)) return;
+        if (!banned && !confirm(`${u.display}(${email}) 님을 차단할까요?\n차단하면 채팅방을 보거나 메시지를 보낼 수 없어요.`)) return;
         try { banned ? await backend.unban(u.uid) : await backend.ban(u.uid); toast(banned ? "차단을 풀었어요" : "차단했어요"); }
         catch (e) { toast("실패했어요: " + e.message); }
       };
