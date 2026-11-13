@@ -1,8 +1,8 @@
 // 서비스 워커: ① 앱 설치(홈 화면에 추가) ② 인터넷이 잠깐 끊겨도 화면 열기 ③ 알림 클릭 처리
-const CACHE = "causchoolchat-v7";
+const CACHE = "causchoolchat-v8";
 const SHELL = [
   "./", "index.html", "css/style.css", "manifest.json",
-  "js/app.js", "js/firebase-config.js", "js/backend-firebase.js", "js/backend-demo.js",
+  "js/app.js", "js/firebase-config.js", "js/backend-firebase.js",
   "icons/icon-192.png", "icons/icon-512.png", "icons/favicon-64.png",
 ];
 

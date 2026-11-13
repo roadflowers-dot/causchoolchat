@@ -91,7 +91,7 @@
           <button id="room-menu-btn" class="icon-btn" title="방 관리 (관리자)" hidden>⋯</button>
           <div id="room-menu" class="popup-menu" hidden>
             <button data-act="notice">📢 공지 설정</button>
-            <button data-act="rename">✏️ 방 이름 바꾸기</button>
+            <button data-act="settings">⚙️ 방 설정 (이름·멤버)</button>
             <button data-act="delete" class="danger">🗑 방 삭제</button>
           </div>
         </div>
@@ -103,9 +103,10 @@
       <div id="messages" class="messages"></div>
       <button id="jump-btn" class="jump-btn" hidden>↓ 새 메시지</button>
 
+      <div id="typing" class="typing" hidden><span class="typing-dots"><i></i><i></i><i></i></span><span id="typing-text"></span></div>
       <div id="reply-bar" class="reply-bar" hidden>
         <div class="reply-info">
-          <div class="reply-to">↩ <b id="reply-name"></b>에게 답장</div>
+          <div class="reply-to" id="reply-label"></div>
           <div id="reply-text" class="reply-text"></div>
         </div>
         <button id="reply-cancel" class="icon-btn" title="답장 취소">✕</button>
@@ -114,6 +115,7 @@
         <label class="icon-btn attach" title="파일 첨부 (5MB까지)">
           📎<input id="file-input" type="file" hidden />
         </label>
+        <button type="button" id="poll-btn" class="icon-btn attach" title="투표 만들기">📊</button>
         <textarea id="message-input" rows="1" placeholder="메시지를 입력하세요" maxlength="2000"></textarea>
         <button type="submit" class="send-btn" title="전송 (Enter)">➤</button>
       </form>
@@ -161,7 +163,10 @@
       <h3>👑 관리자 메뉴</h3>
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="invite">✉️ 초대 관리</button>
-        <button type="button" class="tab-btn" data-tab="users">👥 사용자 관리</button>
+        <button type="button" class="tab-btn" data-tab="users">👥 사용자</button>
+        <button type="button" class="tab-btn" data-tab="filter">🚫 금지어</button>
+        <button type="button" class="tab-btn" data-tab="storage">💾 저장 공간</button>
+        <button type="button" class="tab-btn" data-tab="owner" id="admin-tab-owner" hidden>👑 부관리자</button>
       </div>
 
       <!-- 초대 관리 -->
@@ -198,10 +203,92 @@
         <ul id="user-list" class="user-list"></ul>
       </div>
 
+      <!-- 금지어 -->
+      <div id="tab-filter" class="tab-panel" hidden>
+        <p class="hint">🚫 목록에 있는 말은 보낼 때 <b>**</b>로 가려져요. 띄어쓰기나 기호를 섞어 써도 찾아내요. (예: "시 발", "시.발")</p>
+        <form id="filter-form" class="invite-form">
+          <input id="filter-input" class="search" placeholder="추가할 말 (여러 개는 쉼표로 구분)" autocomplete="off" />
+          <button type="submit" class="primary-btn">추가</button>
+        </form>
+        <div class="invite-tools">
+          <span class="hint">금지어 <b id="filter-count">0</b>개</span>
+          <button type="button" id="filter-reset" class="text-btn">기본 목록으로 되돌리기</button>
+        </div>
+        <div id="filter-list" class="chips"></div>
+      </div>
+
+      <!-- 저장 공간 -->
+      <div id="tab-storage" class="tab-panel" hidden>
+        <p class="hint">💾 무료 요금제의 저장 공간은 <b>1GB</b>예요. 공유된 파일이 대부분을 차지해요. 오래된 파일을 지워서 공간을 확보할 수 있어요.</p>
+        <button type="button" id="storage-scan" class="primary-btn">사용량 확인하기</button>
+        <div class="storage-meter"><div id="storage-bar" class="storage-fill"></div></div>
+        <p id="storage-result" class="hint"></p>
+        <div id="storage-clean" class="storage-clean" hidden>
+          <label><input id="storage-days" type="number" min="1" max="3650" value="30" /> 일보다 오래된 파일</label>
+          <button type="button" id="storage-delete" class="pill-btn danger">지우기</button>
+        </div>
+        <p class="hint">지운 파일은 메시지는 남지만 "삭제된 파일"로 보여요. 1:1 채팅 파일도 함께 정리되지만 관리자는 파일 이름이나 내용을 볼 수 없어요.</p>
+      </div>
+
+      <!-- 부관리자 (최고 관리자만) -->
+      <div id="tab-owner" class="tab-panel" hidden>
+        <p class="hint">👑 부관리자는 초대·차단·방 관리·메시지 삭제·금지어·저장 공간 관리를 할 수 있어요. 부관리자 추가/해제는 최고 관리자(나)만 할 수 있어요.</p>
+        <form id="admin-form" class="invite-form">
+          <input id="admin-input" class="search" placeholder="선생님@gmail.com" autocomplete="off" />
+          <button type="submit" class="primary-btn">관리자로 추가</button>
+        </form>
+        <ul id="admin-list" class="user-list"></ul>
+      </div>
+
       <div class="dialog-actions">
         <button type="button" class="primary-btn" data-close>닫기</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- 방 만들기 / 방 설정 (관리자) -->
+  <dialog id="room-dialog" class="dialog">
+    <form id="room-form" class="dialog-body">
+      <h3 id="room-dialog-title">＋ 새 채팅방 만들기</h3>
+      <label class="field">
+        <span>방 이름 (40자까지)</span>
+        <input id="room-name-input" maxlength="40" required autocomplete="off" />
+      </label>
+      <div class="field">
+        <span>누가 볼 수 있나요?</span>
+        <label class="check"><input type="radio" name="room-vis" id="room-vis-public" checked /> 🌐 공개 — 등록된 모든 사람</label>
+        <label class="check"><input type="radio" name="room-vis" id="room-vis-private" /> 🔒 멤버만 — 고른 사람만 보이고 들어갈 수 있어요</label>
+      </div>
+      <div id="room-members-box" class="field" hidden>
+        <span>멤버 고르기 (<b id="room-member-count">0</b>명)</span>
+        <input id="room-member-search" class="search" placeholder="이름으로 찾기" autocomplete="off" />
+        <ul id="room-member-list" class="user-list member-list"></ul>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="text-btn" data-close>취소</button>
+        <button type="submit" id="room-save" class="primary-btn">만들기</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 투표 만들기 -->
+  <dialog id="poll-dialog" class="dialog">
+    <form id="poll-form" class="dialog-body">
+      <h3>📊 투표 만들기</h3>
+      <label class="field">
+        <span>질문</span>
+        <input id="poll-question" maxlength="200" placeholder="예: 현장체험학습 점심 메뉴는?" autocomplete="off" />
+      </label>
+      <div class="field">
+        <span>선택지 (2~6개)</span>
+        <div id="poll-options" class="poll-options"></div>
+        <button type="button" id="poll-add" class="text-btn">＋ 선택지 추가</button>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="text-btn" data-close>취소</button>
+        <button type="submit" class="primary-btn">투표 올리기</button>
+      </div>
+    </form>
   </dialog>
 
   <!-- 1:1 채팅 상대 고르기 -->

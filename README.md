@@ -24,7 +24,12 @@
   📧 버튼으로 초대 메일 보내기, 📋 초대 문구 복사 가능.
 - **1:1 채팅**: 방 목록의 "1:1 채팅 ＋" 또는 단체방에서 친구 프로필 사진을 누르면 시작.
   두 사람만 볼 수 있어요 (관리자도 볼 수 없음). `dms/dm_{uid1}_{uid2}`에 저장.
-- 주소 끝에 `?demo`를 붙이면 실제 데이터에 영향 없는 연습 화면
+- **나쁜 말 필터**: 금지어는 보낼 때 `**`로 가려짐 (띄어쓰기·기호 섞어도 찾아냄). 관리자 메뉴 🚫 금지어에서 추가/삭제.
+- **채팅방은 관리자만 생성**. 🌐 공개 방 / 🔒 멤버만 보이는 비공개 방. 채팅방 ⋯ → ⚙️ 방 설정에서 멤버 변경.
+- **부관리자**: 최고 관리자가 관리자 메뉴 👑 부관리자 탭에서 이메일로 추가/해제 (최고 관리자 이메일은 `firestore.rules`의 `isOwner()`).
+- **메시지 수정** (내 글, "(수정됨)" 표시), **"OO님이 입력 중…"** 표시, **📊 투표** (2~6개 선택지, 마감 가능).
+- **저장 공간 관리**: 관리자 메뉴 💾 저장 공간 → 사용량 확인, N일 지난 파일 지우기.
+- 데모 모드(`?demo`)는 개발용 컴퓨터(localhost)에서만 켜지고, 실제 사이트에는 올라가지 않아요.
 
 ## 구성
 
@@ -74,9 +79,15 @@ banned/{uid}                         by, at   (관리자만 추가/삭제)
 invites/{소문자 이메일}               by, at   (관리자만 추가/삭제)
 pending/{uid}                        email, name, photo, at   (등록 안 된 사람의 입장 요청. 본인만 작성, 관리자만 목록/삭제)
 dms/dm_{작은uid}_{큰uid}              members[2], createdAt, lastMessageAt, lastMessage  (+ messages, files 하위 구조는 rooms와 같음)
-rooms/{roomId}                       name, createdBy, createdAt, lastMessageAt, lastMessage{uid,name,text}, notice{text}
+rooms/{roomId}                       name, createdBy, createdAt, visibility("public"|"private"), members[],
+                                     lastMessageAt, lastMessage{uid,name,text}, notice{text}
+rooms|dms/{id}/typing/{uid}          at   ("입력 중" 표시)
+admins/{소문자 이메일}                by, at   (부관리자, 최고 관리자만 추가/삭제)
+config/filter                        words[]   (금지어, 관리자만 수정)
+fileIndex/{fileId}                   kind, roomId, size, chunkCount, uid, at   (저장 공간 관리용, 관리자만 열람)
 rooms/{roomId}/messages/{msgId}      type("text"|"file"), text, file{id,name,size,contentType},
-                                     replyTo{id,name,text}, reactions{uid: 이모지},
+                                     replyTo{id,name,text}, reactions{uid: 이모지}, editedAt,
+                                     poll{question,options[]}, votes{uid: 번호}, closed,
                                      uid, name, photo, createdAt
 rooms/{roomId}/files/{fileId}        name, size, contentType, chunkCount, uid, uploaderName, createdAt
 rooms/{roomId}/files/{fileId}/chunks/{0,1,..}   i, uid, data(bytes, 최대 900KB)

@@ -65,6 +65,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
         const user = toUser(u);
         // 관리자 확인: 관리자만 읽을 수 있는 문서를 읽어 봄 (관리자 이메일은 보안 규칙에만 있음)
         user.isAdmin = await getDoc(doc(db, "admin", "check")).then(() => true, () => false);
+        user.isOwner = user.isAdmin && await getDoc(doc(db, "admin", "owner")).then(() => true, () => false);
         cb(user);
         // 프로필에는 이메일을 넣지 않음 (다른 학생에게 보이지 않게). 이메일은 본인·관리자만 보는 곳에 따로 저장
         setDoc(doc(db, "users", u.uid), {
@@ -78,16 +79,48 @@ export function createFirebaseBackend(config, { allowedDomain }) {
     signIn: () => signInWithPopup(auth, provider),
     signOut: () => signOut(auth),
 
-    listenRooms(cb) {
-      const q = query(collection(db, "rooms"), orderBy("createdAt"));
-      return onSnapshot(q, (snap) => cb(snap.docs.map((d) => {
+    // 채팅방 목록: 관리자는 전부, 학생은 '공개 방' + '내가 멤버인 비공개 방'
+    listenRooms(cb, { admin = false } = {}) {
+      const toRoom = (d) => {
         const r = d.data({ serverTimestamps: "estimate" });
-        return { id: d.id, ...r, kind: "group", lastMessageAt: r.lastMessageAt?.toDate() ?? null };
-      })), console.warn);
+        return { id: d.id, ...r, kind: "group", lastMessageAt: r.lastMessageAt?.toDate() ?? null, _created: r.createdAt?.toMillis?.() ?? 0 };
+      };
+      const sortByCreated = (list) => list.sort((a, b) => a._created - b._created);
+      if (admin) {
+        return onSnapshot(query(collection(db, "rooms"), orderBy("createdAt")), (snap) => cb(snap.docs.map(toRoom)), console.warn);
+      }
+      let pub = [], priv = [];
+      const emit = () => {
+        const seen = new Set();
+        cb(sortByCreated([...pub, ...priv].filter((r) => !seen.has(r.id) && seen.add(r.id))));
+      };
+      const off1 = onSnapshot(query(collection(db, "rooms"), where("visibility", "==", "public")),
+        (snap) => { pub = snap.docs.map(toRoom); emit(); }, console.warn);
+      const off2 = onSnapshot(query(collection(db, "rooms"), where("members", "array-contains", auth.currentUser.uid)),
+        (snap) => { priv = snap.docs.map(toRoom).filter((r) => r.visibility === "private"); emit(); }, console.warn);
+      return () => { off1(); off2(); };
     },
-    createRoom(name) {
+    createRoom(name, { visibility = "public", members = [] } = {}) {
       const u = auth.currentUser;
-      return setDoc(doc(collection(db, "rooms")), { name, createdBy: u.uid, createdAt: serverTimestamp() });
+      return setDoc(doc(collection(db, "rooms")), {
+        name, createdBy: u.uid, createdAt: serverTimestamp(), visibility,
+        ...(visibility === "private" ? { members } : {}),
+      });
+    },
+    setRoomAccess(roomId, { visibility, members }) {
+      return updateDoc(doc(db, "rooms", roomId), {
+        visibility, members: visibility === "private" ? members : deleteField(),
+      });
+    },
+    // (관리자) 예전 버전 방에는 공개 여부 칸이 없어서 학생들 목록에 안 보임 → '공개'로 채워 넣기
+    async migrateRooms(rooms) {
+      const old = rooms.filter((r) => !r.visibility);
+      for (let i = 0; i < old.length; i += 400) {
+        const batch = writeBatch(db);
+        old.slice(i, i + 400).forEach((r) => batch.update(doc(db, "rooms", r.id), { visibility: "public" }));
+        await batch.commit();
+      }
+      return old.length;
     },
 
     // 최근 메시지 PAGE_SIZE개를 실시간으로
@@ -130,6 +163,10 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       const meta = { name: file.name, size: file.size, contentType: file.type || "application/octet-stream" };
       const batch = writeBatch(db);
       batch.set(fileRef, { ...meta, chunkCount, uid: u.uid, uploaderName: nameOf(u), createdAt: serverTimestamp() });
+      // 저장 공간 관리용 목록 (크기·날짜만, 이름 없음)
+      batch.set(doc(db, "fileIndex", fileRef.id), {
+        kind: top(roomId), roomId, size: file.size, chunkCount, uid: u.uid, at: serverTimestamp(),
+      });
       addMessage(batch, roomId, { type: "file", file: { id: fileRef.id, ...meta }, ...(replyTo ? { replyTo } : {}) }, "📎 " + file.name);
       await batch.commit();
       onProgress?.(1);
@@ -145,6 +182,7 @@ export function createFirebaseBackend(config, { allowedDomain }) {
         if (fileSnap.exists()) {
           for (let i = 0; i < fileSnap.data().chunkCount; i++) batch.delete(doc(fileRef, "chunks", String(i)));
           batch.delete(fileRef);
+          batch.delete(doc(db, "fileIndex", msg.file.id));
         }
       }
       await batch.commit();
@@ -157,6 +195,81 @@ export function createFirebaseBackend(config, { allowedDomain }) {
       return updateDoc(doc(messagesCol(roomId), msg.id), {
         [`reactions.${uid}`]: current === emoji ? deleteField() : emoji,
       });
+    },
+
+    // 내 글 수정
+    editMessage(roomId, msg, text) {
+      return updateDoc(doc(messagesCol(roomId), msg.id), { text, editedAt: serverTimestamp() });
+    },
+
+    // ----- 투표 -----
+    async sendPoll(roomId, question, options) {
+      const batch = writeBatch(db);
+      addMessage(batch, roomId, { type: "poll", poll: { question, options } }, "📊 투표: " + question);
+      await batch.commit();
+    },
+    // index가 null이면 내 표 취소
+    vote(roomId, msg, index) {
+      const uid = auth.currentUser.uid;
+      return updateDoc(doc(messagesCol(roomId), msg.id), { [`votes.${uid}`]: index === null ? deleteField() : index });
+    },
+    closePoll(roomId, msg) { return updateDoc(doc(messagesCol(roomId), msg.id), { closed: true }); },
+
+    // ----- "입력 중…" -----
+    setTyping(roomId, on) {
+      const ref = doc(db, top(roomId), roomId, "typing", auth.currentUser.uid);
+      return (on ? setDoc(ref, { at: serverTimestamp() }) : deleteDoc(ref)).catch(() => {});
+    },
+    listenTyping(roomId, cb) {
+      return onSnapshot(collection(db, top(roomId), roomId, "typing"), (snap) => {
+        cb(snap.docs.map((d) => ({ uid: d.id, at: d.data({ serverTimestamps: "estimate" }).at?.toDate?.() ?? new Date() })));
+      }, () => {});
+    },
+
+    // ----- 나쁜 말 필터 -----
+    listenFilter(cb) {
+      return onSnapshot(doc(db, "config", "filter"), (d) => cb(d.exists() ? d.data().words : null), () => cb(null));
+    },
+    saveFilter(words) { return setDoc(doc(db, "config", "filter"), { words, updatedAt: serverTimestamp() }); },
+
+    // ----- 부관리자 (최고 관리자만 추가/삭제) -----
+    listenAdmins(cb) {
+      return onSnapshot(collection(db, "admins"), (snap) => cb(snap.docs.map((d) => d.id)), console.warn);
+    },
+    addAdmin(email) { return setDoc(doc(db, "admins", email.toLowerCase()), { by: auth.currentUser.uid, at: serverTimestamp() }); },
+    removeAdmin(email) { return deleteDoc(doc(db, "admins", email.toLowerCase())); },
+
+    // ----- 저장 공간 (관리자) -----
+    // 파일 목록: 새 파일은 fileIndex에, 예전 단체방 파일은 방마다 직접 확인
+    async scanStorage(groupRooms) {
+      const map = new Map();
+      const idx = await getDocs(collection(db, "fileIndex"));
+      idx.forEach((d) => {
+        const x = d.data();
+        map.set(d.id, { id: d.id, kind: x.kind, roomId: x.roomId, size: x.size, chunkCount: x.chunkCount, at: x.at?.toDate?.() ?? new Date(0), indexed: true });
+      });
+      for (const r of groupRooms) {
+        const files = await getDocs(collection(db, "rooms", r.id, "files"));
+        files.forEach((d) => {
+          if (map.has(d.id)) return;
+          const x = d.data();
+          map.set(d.id, { id: d.id, kind: "rooms", roomId: r.id, size: x.size, chunkCount: x.chunkCount, at: x.createdAt?.toDate?.() ?? new Date(0), indexed: false });
+        });
+      }
+      return [...map.values()];
+    },
+    // 파일 지우기 (조각 + 파일 정보 + 목록). 메시지는 남고 '삭제된 파일'로 보임
+    async deleteFiles(entries, onProgress) {
+      let done = 0;
+      for (const f of entries) {
+        const batch = writeBatch(db);
+        const fileRef = doc(db, f.kind, f.roomId, "files", f.id);
+        for (let i = 0; i < (f.chunkCount || 1); i++) batch.delete(doc(fileRef, "chunks", String(i)));
+        batch.delete(fileRef);
+        batch.delete(doc(db, "fileIndex", f.id));
+        await batch.commit();
+        onProgress?.(++done, entries.length);
+      }
     },
 
     // ----- 1:1 채팅 -----

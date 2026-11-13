@@ -214,6 +214,61 @@ body.guest #reply-bar, body.guest #upload-progress { display: none !important; }
 :root[data-theme="dark"] .pending-box { background: #2c1d1f; border-color: #4a2a2d; }
 :root[data-theme="dark"] .pending-title { color: #ff9b9b; }
 
+/* ---------- 입력 중 · 수정됨 ---------- */
+.typing { display: flex; align-items: center; gap: 8px; padding: 4px 18px 6px; font-size: 12.5px; color: var(--muted); background: var(--bg); }
+.typing-dots { display: inline-flex; gap: 3px; }
+.typing-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+.typing-dots i:nth-child(2) { animation-delay: .2s; } .typing-dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+.edited { font-size: 11.5px; opacity: .7; }
+body.guest #poll-btn, body.guest #typing { display: none !important; }
+
+/* ---------- 투표 ---------- */
+.poll {
+  background: var(--theirs); border: 1px solid var(--theirs-border); border-radius: 16px; padding: 12px;
+  width: min(320px, 70vw); display: flex; flex-direction: column; gap: 6px;
+}
+.poll-q { font-weight: 700; font-size: 15px; margin-bottom: 2px; word-break: break-word; }
+.poll-opt {
+  position: relative; overflow: hidden; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  border: 1px solid var(--border); background: var(--panel); border-radius: 10px; padding: 9px 12px; text-align: left; font-size: 14px;
+}
+.poll-opt:hover:not(:disabled) { border-color: var(--primary); }
+.poll-opt:disabled { cursor: default; }
+.poll-opt.mine { border-color: var(--primary); font-weight: 700; }
+.poll-bar { position: absolute; inset: 0 auto 0 0; background: var(--primary-soft); transition: width .3s; z-index: 0; }
+.poll-label, .poll-count { position: relative; z-index: 1; }
+.poll-label { word-break: break-word; }
+.poll-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.poll-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.poll.closed .poll-q::after { content: " (마감)"; color: var(--muted); font-weight: 400; font-size: 13px; }
+.poll-options { display: flex; flex-direction: column; gap: 6px; }
+.poll-opt-row { display: flex; gap: 6px; }
+.poll-opt-row input {
+  flex: 1; font: inherit; font-size: 15px; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
+}
+.poll-opt-row input:focus { outline: none; border-color: var(--primary); }
+#poll-add { align-self: flex-start; color: var(--primary); }
+
+/* ---------- 관리자: 금지어 · 저장 공간 · 방 멤버 ---------- */
+.tabs { flex-wrap: wrap; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); font-size: 13px;
+}
+.chip button { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 0 4px; border-radius: 50%; }
+.chip button:hover { color: var(--danger); }
+.storage-meter { height: 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); overflow: hidden; }
+.storage-fill { height: 100%; width: 0; background: var(--primary); transition: width .4s; }
+.storage-fill.warn { background: #f08c00; }
+.storage-clean { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.storage-clean input { width: 70px; font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+#storage-scan { align-self: flex-start; }
+.member-list { max-height: 260px; }
+.member-pick input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary); flex: none; }
+
 /* ---------- 앱 설치 버튼 ---------- */
 .install-btn {
   border: 0; background: linear-gradient(135deg, #5c84ff, #3458e6); color: #fff; font-weight: 700;

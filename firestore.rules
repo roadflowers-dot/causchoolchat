@@ -2,42 +2,149 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ===== 관리자 =====
-    // 관리자 이메일 목록. 관리자를 추가/변경하려면 여기를 고친 뒤 다시 배포하세요.
-    // (이 파일은 웹사이트에 공개되지 않고 Firebase 서버에만 올라갑니다)
+    // ===================== 사람 구분 =====================
+
+    function verified() { return request.auth != null && request.auth.token.email_verified == true; }
+    function myEmail() { return request.auth.token.email.lower(); }
+
+    // 최고 관리자 (이 파일에만 있고 웹사이트에는 공개되지 않음). 부관리자를 추가/삭제할 수 있는 유일한 사람
+    function isOwner() {
+      return verified() && request.auth.token.email in ['roadflowers@gmail.com'];
+    }
+    // 관리자 = 최고 관리자 + 최고 관리자가 이메일로 추가한 부관리자(admins 목록)
     function isAdmin() {
-      return request.auth != null
-        && request.auth.token.email_verified == true
-        && request.auth.token.email in ['roadflowers@gmail.com'];
+      return isOwner() || (verified() && exists(/databases/$(database)/documents/admins/$(myEmail())));
+    }
+    // 들어올 수 있는 사람: 관리자, 또는 초대된 Gmail로 로그인했고 차단되지 않은 사용자
+    function isMember() {
+      return isAdmin() || (verified()
+        && exists(/databases/$(database)/documents/invites/$(myEmail()))
+        && !exists(/databases/$(database)/documents/banned/$(request.auth.uid)));
     }
 
-    function myEmail() { return request.auth.token.email.lower(); }
-    function verified() { return request.auth != null && request.auth.token.email_verified == true; }
+    // ===================== 공통 검사 =====================
+
+    // 파일 크기 제한: 5MB (= 900KB 조각 최대 6개). firebase-config.js의 MAX_FILE_MB와 맞추세요.
+    function maxFileBytes() { return 5 * 1024 * 1024; }
+    function maxChunks() { return 6; }
+    function chunkBytes() { return 900 * 1024; }
+    function reactionEmojis() { return ['👍', '❤️', '😂', '😮', '😢', '🎉']; }
 
     // 메시지에 붙는 이름·사진 칸 크기 제한
     function validSender(d) {
       return (!('name' in d) || d.name == null || (d.name is string && d.name.size() <= 100))
         && (!('photo' in d) || d.photo == null || (d.photo is string && d.photo.size() <= 1000));
     }
-
-    // 들어올 수 있는 사람: 관리자, 또는 '관리자가 초대한 Gmail'로 로그인했고 차단되지 않은 사용자
-    // (초대 목록에 없는 외부 사람은 아무것도 읽거나 쓸 수 없음)
-    function isMember() {
-      return request.auth != null
-        && (isAdmin() || (
-          request.auth.token.email_verified == true
-          && exists(/databases/$(database)/documents/invites/$(myEmail()))
-          && !exists(/databases/$(database)/documents/banned/$(request.auth.uid))));
+    function validText(t) { return t is string && t.size() > 0 && t.size() <= 2000; }
+    function validReply(d) {
+      return !('replyTo' in d)
+        || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
+            && d.replyTo.text is string && d.replyTo.text.size() <= 120);
+    }
+    // 투표: 질문 1~200자, 선택지 2~6개 (각 1~50자)
+    function optOk(o, i) { return i >= o.size() || (o[i] is string && o[i].size() >= 1 && o[i].size() <= 50); }
+    function validPoll(p) {
+      return p.keys().hasOnly(['question', 'options'])
+        && p.question is string && p.question.size() >= 1 && p.question.size() <= 200
+        && p.options is list && p.options.size() >= 2 && p.options.size() <= 6
+        && optOk(p.options, 0) && optOk(p.options, 1) && optOk(p.options, 2)
+        && optOk(p.options, 3) && optOk(p.options, 4) && optOk(p.options, 5);
     }
 
-    // 파일 크기 제한: 5MB (= 900KB 조각 최대 6개). firebase-config.js의 MAX_FILE_MB와 맞추세요.
-    function maxFileBytes() { return 5 * 1024 * 1024; }
-    function maxChunks() { return 6; }
-    function chunkBytes() { return 900 * 1024; }
+    // 새 메시지 (fileDocPath: 첨부 파일 정보 문서 경로)
+    function validNewMessage(fileDocPath) {
+      let d = request.resource.data;
+      return d.uid == request.auth.uid
+        && !('reactions' in d) && !('votes' in d) && !('closed' in d) && !('editedAt' in d)
+        && validReply(d) && validSender(d)
+        && (
+          (d.type == 'text' && validText(d.text))
+          || (d.type == 'file' && getAfter(fileDocPath).data.uid == request.auth.uid)
+          || (d.type == 'poll' && validPoll(d.poll))
+        );
+    }
 
-    // 관리자 확인용 (관리자만 읽을 수 있음 → 앱이 관리자 모드를 켤지 판단)
+    // 메시지 바꾸기: ① 반응 ② 내 글 수정 ③ 투표하기 ④ 내 투표 마감
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function validMessageUpdate() {
+      let d = request.resource.data;
+      let uid = request.auth.uid;
+      return (
+        // ① 반응: 자기 반응 하나만 추가/변경/취소
+        changed().hasOnly(['reactions'])
+        && d.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([uid])
+        && (!(uid in d.reactions) || d.reactions[uid] in reactionEmojis())
+      ) || (
+        // ② 수정: 내 글자 메시지만, 내용과 수정 시각만
+        resource.data.uid == uid && resource.data.type == 'text'
+        && changed().hasOnly(['text', 'editedAt'])
+        && validText(d.text) && d.editedAt == request.time
+      ) || (
+        // ③ 투표: 마감 안 된 투표에 자기 표 하나만
+        resource.data.type == 'poll' && resource.data.get('closed', false) != true
+        && changed().hasOnly(['votes'])
+        && d.votes.diff(resource.data.get('votes', {})).affectedKeys().hasOnly([uid])
+        && (!(uid in d.votes) || (d.votes[uid] is int && d.votes[uid] >= 0 && d.votes[uid] < resource.data.poll.options.size()))
+      ) || (
+        // ④ 마감: 투표를 만든 사람(또는 관리자)
+        resource.data.type == 'poll' && (resource.data.uid == uid || isAdmin())
+        && changed().hasOnly(['closed']) && d.closed == true
+      );
+    }
+
+    // 채팅방 '마지막 메시지'(목록 미리보기·알림용) 갱신
+    function validLastMessageUpdate() {
+      let d = request.resource.data;
+      return changed().hasOnly(['lastMessageAt', 'lastMessage'])
+        && d.lastMessageAt == request.time
+        && d.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
+        && d.lastMessage.uid == request.auth.uid
+        && d.lastMessage.text is string && d.lastMessage.text.size() <= 100;
+    }
+
+    function validFileMeta() {
+      let d = request.resource.data;
+      return d.uid == request.auth.uid
+        && d.name is string && d.name.size() <= 200
+        && d.size is int && d.size <= maxFileBytes()
+        && d.chunkCount is int && d.chunkCount >= 1 && d.chunkCount <= maxChunks();
+    }
+    function validChunk(chunkId) {
+      let d = request.resource.data;
+      return d.uid == request.auth.uid
+        && d.i == int(chunkId) && d.i < maxChunks()
+        && d.data is bytes && d.data.size() <= chunkBytes();
+    }
+    // "입력 중…" 표시: 자기 것만, 시각만
+    function validTyping(uid) {
+      return uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['at'])
+        && request.resource.data.at == request.time;
+    }
+
+    // ===================== 관리 =====================
+
+    // 관리자 확인용: 'owner'는 최고 관리자만, 나머지는 관리자만 읽을 수 있음
     match /admin/{doc} {
-      allow read: if isAdmin();
+      allow read: if (doc == 'owner' && isOwner()) || (doc != 'owner' && isAdmin());
+    }
+
+    // 부관리자 목록 (문서 이름 = 소문자 이메일). 최고 관리자만 추가/삭제
+    match /admins/{email} {
+      allow get: if verified() && (myEmail() == email || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isOwner() && email == email.lower()
+        && email.matches('^[^@ ]+@[^@ ]+[.][^@ ]+$')
+        && request.resource.data.keys().hasOnly(['by', 'at']);
+      allow delete: if isOwner();
+    }
+
+    // 금지어 목록 (나쁜 말 필터): 모두 읽기, 관리자만 수정
+    match /config/{doc} {
+      allow read: if isMember();
+      allow write: if isAdmin() && doc == 'filter'
+        && request.resource.data.keys().hasOnly(['words', 'updatedAt'])
+        && request.resource.data.words is list && request.resource.data.words.size() <= 500;
     }
 
     // 초대 목록 (문서 이름 = 소문자 이메일). 관리자만 추가/삭제. 본인은 자기가 초대됐는지 확인 가능
@@ -50,7 +157,6 @@ service cloud.firestore {
     }
 
     // 입장 요청: 등록(초대)되지 않은 사람이 로그인하면 자기 정보를 남김 → 관리자에게 알림
-    // 본인 것만 쓸 수 있고, 관리자만 목록을 보고 지울 수 있음
     match /pending/{uid} {
       allow get: if request.auth != null && (request.auth.uid == uid || isAdmin());
       allow list: if isAdmin();
@@ -101,102 +207,91 @@ service cloud.firestore {
         && !('email' in request.resource.data);
     }
 
-    match /rooms/{roomId} {
-      allow read: if isMember();
+    // 파일 목록 (저장 공간 관리용): 크기·날짜만 있고 파일 이름·내용은 없음. 관리자만 열람
+    match /fileIndex/{fileId} {
+      allow get, list: if isAdmin();
       allow create: if isMember()
+        && request.resource.data.keys().hasOnly(['kind', 'roomId', 'size', 'chunkCount', 'uid', 'at'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.kind in ['rooms', 'dms']
+        && request.resource.data.at == request.time
+        && request.resource.data.size is int && request.resource.data.size <= maxFileBytes()
+        && request.resource.data.chunkCount is int && request.resource.data.chunkCount >= 1
+        && request.resource.data.chunkCount <= maxChunks()
+        && getAfter(/databases/$(database)/documents/$(request.resource.data.kind)/$(request.resource.data.roomId)/files/$(fileId)).data.uid == request.auth.uid;
+      allow delete: if isAdmin() || (request.auth != null && (resource == null || resource.data.uid == request.auth.uid));
+    }
+
+    // ===================== 단체 채팅방 =====================
+    // visibility: 'public'(등록된 모두) / 'private'(members에 있는 사람만). 관리자는 모든 방을 볼 수 있음
+    function canSeeRoom(r) {
+      return isAdmin() || (isMember()
+        && (r.get('visibility', 'public') == 'public' || request.auth.uid in r.get('members', [])));
+    }
+
+    match /rooms/{roomId} {
+      function room() { return get(/databases/$(database)/documents/rooms/$(roomId)).data; }
+      function canSee() { return canSeeRoom(room()); }
+      function fileDoc(fileId) { return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId); }
+
+      allow get: if canSeeRoom(resource.data);
+      allow list: if isAdmin() || (isMember()
+        && (resource.data.get('visibility', 'public') == 'public' || request.auth.uid in resource.data.get('members', [])));
+      // 채팅방은 관리자만 만들 수 있음
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['name', 'createdBy', 'createdAt', 'visibility', 'members'])
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 40
-        && request.resource.data.keys().hasOnly(['name', 'createdBy', 'createdAt']);
-      // 메시지를 보낼 때 '마지막 메시지'(목록 미리보기·알림용)만 갱신 가능. 관리자는 이름·공지 변경 가능
-      allow update: if isAdmin() || (isMember()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageAt', 'lastMessage'])
-        && request.resource.data.lastMessageAt == request.time
-        && request.resource.data.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
-        && request.resource.data.lastMessage.uid == request.auth.uid
-        && request.resource.data.lastMessage.text is string
-        && request.resource.data.lastMessage.text.size() <= 100);
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && request.resource.data.visibility in ['public', 'private']
+        && (!('members' in request.resource.data)
+            || (request.resource.data.members is list && request.resource.data.members.size() <= 500));
+      // 관리자: 이름·공지·멤버 등 변경 / 멤버: 메시지 보낼 때 '마지막 메시지'만
+      allow update: if isAdmin() || (canSeeRoom(resource.data) && validLastMessageUpdate());
       allow delete: if isAdmin();
 
-      function fileDoc(fileId) {
-        return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId);
+      match /messages/{msgId} {
+        allow read: if canSee();
+        allow create: if canSee() && validNewMessage(fileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')));
+        allow update: if canSee() && validMessageUpdate();
+        allow delete: if canSee() && (resource.data.uid == request.auth.uid || isAdmin());
       }
 
-      match /messages/{msgId} {
-        function validReply(d) {
-          return !('replyTo' in d)
-            || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
-                && d.replyTo.text is string && d.replyTo.text.size() <= 120);
-        }
-        allow read: if isMember();
-        // 본인 이름으로만 작성 (반응은 처음부터 넣을 수 없음)
-        allow create: if isMember()
-          && request.resource.data.uid == request.auth.uid
-          && !('reactions' in request.resource.data)
-          && validReply(request.resource.data)
-          && validSender(request.resource.data)
-          && (
-            (request.resource.data.type == 'text'
-              && request.resource.data.text is string
-              && request.resource.data.text.size() > 0
-              && request.resource.data.text.size() <= 2000)
-            ||
-            (request.resource.data.type == 'file'
-              && getAfter(fileDoc(request.resource.data.file.id)).data.uid == request.auth.uid)
-          );
-        // 반응: 누구나 '자기 반응 하나'만 추가/변경/취소 가능. 메시지 내용은 수정 불가
-        allow update: if isMember()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
-          && request.resource.data.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
-          && (!(request.auth.uid in request.resource.data.reactions)
-              || request.resource.data.reactions[request.auth.uid] in ['👍', '❤️', '😂', '😮', '😢', '🎉']);
-        // 삭제: 본인 메시지 또는 관리자
-        allow delete: if isMember() && (resource.data.uid == request.auth.uid || isAdmin());
+      match /typing/{uid} {
+        allow read: if canSee();
+        allow create, update: if canSee() && validTyping(uid);
+        allow delete: if request.auth != null && uid == request.auth.uid;
       }
 
       // 파일 정보 (Cloud Storage 대신 Firestore에 저장 — 무료 요금제용)
       // 조각(chunks)을 먼저 올린 뒤 만들 수 있음. 첫 조각과 마지막 조각이 본인 것인지 확인.
       match /files/{fileId} {
-        function chunk(i) {
-          return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId)/chunks/$(string(i));
-        }
-        allow read: if isMember();
-        allow create: if isMember()
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() <= 200
-          && request.resource.data.size is int
-          && request.resource.data.size <= maxFileBytes()
-          && request.resource.data.chunkCount is int
-          && request.resource.data.chunkCount >= 1
-          && request.resource.data.chunkCount <= maxChunks()
+        function chunk(i) { return /databases/$(database)/documents/rooms/$(roomId)/files/$(fileId)/chunks/$(string(i)); }
+        allow read: if canSee();
+        allow create: if canSee() && validFileMeta()
           && get(chunk(0)).data.uid == request.auth.uid
           && get(chunk(request.resource.data.chunkCount - 1)).data.uid == request.auth.uid;
-        allow delete: if isMember() && (resource.data.uid == request.auth.uid || isAdmin());
+        allow delete: if isAdmin() || (canSee() && resource.data.uid == request.auth.uid);
 
         // 파일 내용 조각 (0, 1, 2, ...) — 새로 만들기만 가능, 덮어쓰기 불가
         match /chunks/{chunkId} {
-          allow read: if isMember();
-          allow create: if isMember()
-            && request.resource.data.uid == request.auth.uid
-            && request.resource.data.i == int(chunkId)
-            && request.resource.data.i < maxChunks()
-            && request.resource.data.data is bytes
-            && request.resource.data.data.size() <= chunkBytes();
-          allow delete: if isMember() && (resource.data.uid == request.auth.uid || isAdmin());
+          allow read: if canSee();
+          allow create: if canSee() && validChunk(chunkId);
+          allow delete: if isAdmin() || (canSee() && resource.data.uid == request.auth.uid);
         }
       }
     }
-    // ===== 1:1 채팅 =====
-    // 문서 이름: dm_{작은uid}_{큰uid}  → 이름만 봐도 두 사람이 누군지 알 수 있음
-    // 두 사람만 읽고 쓸 수 있음 (관리자도 볼 수 없음)
+
+    // ===================== 1:1 채팅 =====================
+    // 문서 이름: dm_{작은uid}_{큰uid}. 두 사람만 읽고 쓸 수 있음 (관리자도 내용을 볼 수 없음)
     match /dms/{dmId} {
       function dmParts() { return dmId.split('_'); }
       function inDm() {
         return isMember() && dmParts().size() == 3 && dmParts()[0] == 'dm'
           && (request.auth.uid == dmParts()[1] || request.auth.uid == dmParts()[2]);
       }
+      function dmFileDoc(fileId) { return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId); }
+
       allow get: if inDm();
       allow list: if isMember() && request.auth.uid in resource.data.members;
       allow create: if inDm()
@@ -205,74 +300,34 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/users/$(dmParts()[1]))
         && exists(/databases/$(database)/documents/users/$(dmParts()[2]))
         && request.resource.data.keys().hasOnly(['members', 'createdAt']);
-      allow update: if inDm()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageAt', 'lastMessage'])
-        && request.resource.data.lastMessageAt == request.time
-        && request.resource.data.lastMessage.keys().hasOnly(['uid', 'name', 'text'])
-        && request.resource.data.lastMessage.uid == request.auth.uid
-        && request.resource.data.lastMessage.text is string
-        && request.resource.data.lastMessage.text.size() <= 100;
-
-      function dmFileDoc(fileId) {
-        return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId);
-      }
+      allow update: if inDm() && validLastMessageUpdate();
 
       match /messages/{msgId} {
-        function validReply(d) {
-          return !('replyTo' in d)
-            || (d.replyTo.keys().hasOnly(['id', 'name', 'text'])
-                && d.replyTo.text is string && d.replyTo.text.size() <= 120);
-        }
         allow read: if inDm();
-        allow create: if inDm()
-          && request.resource.data.uid == request.auth.uid
-          && !('reactions' in request.resource.data)
-          && validReply(request.resource.data)
-          && validSender(request.resource.data)
-          && (
-            (request.resource.data.type == 'text'
-              && request.resource.data.text is string
-              && request.resource.data.text.size() > 0
-              && request.resource.data.text.size() <= 2000)
-            ||
-            (request.resource.data.type == 'file'
-              && getAfter(dmFileDoc(request.resource.data.file.id)).data.uid == request.auth.uid)
-          );
-        allow update: if inDm()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
-          && request.resource.data.reactions.diff(resource.data.get('reactions', {})).affectedKeys().hasOnly([request.auth.uid])
-          && (!(request.auth.uid in request.resource.data.reactions)
-              || request.resource.data.reactions[request.auth.uid] in ['👍', '❤️', '😂', '😮', '😢', '🎉']);
+        allow create: if inDm() && validNewMessage(dmFileDoc(request.resource.data.get('file', {'id': 'none'}).get('id', 'none')));
+        allow update: if inDm() && validMessageUpdate();
         allow delete: if inDm() && resource.data.uid == request.auth.uid;
       }
 
-      match /files/{fileId} {
-        function dmChunk(i) {
-          return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId)/chunks/$(string(i));
-        }
+      match /typing/{uid} {
         allow read: if inDm();
-        allow create: if inDm()
-          && request.resource.data.uid == request.auth.uid
-          && request.resource.data.name is string
-          && request.resource.data.name.size() <= 200
-          && request.resource.data.size is int
-          && request.resource.data.size <= maxFileBytes()
-          && request.resource.data.chunkCount is int
-          && request.resource.data.chunkCount >= 1
-          && request.resource.data.chunkCount <= maxChunks()
+        allow create, update: if inDm() && validTyping(uid);
+        allow delete: if request.auth != null && uid == request.auth.uid;
+      }
+
+      // 관리자는 저장 공간 정리 때 오래된 파일을 지울 수만 있음 (읽을 수는 없음)
+      match /files/{fileId} {
+        function dmChunk(i) { return /databases/$(database)/documents/dms/$(dmId)/files/$(fileId)/chunks/$(string(i)); }
+        allow read: if inDm();
+        allow create: if inDm() && validFileMeta()
           && get(dmChunk(0)).data.uid == request.auth.uid
           && get(dmChunk(request.resource.data.chunkCount - 1)).data.uid == request.auth.uid;
-        allow delete: if inDm() && resource.data.uid == request.auth.uid;
+        allow delete: if isAdmin() || (inDm() && resource.data.uid == request.auth.uid);
 
         match /chunks/{chunkId} {
           allow read: if inDm();
-          allow create: if inDm()
-            && request.resource.data.uid == request.auth.uid
-            && request.resource.data.i == int(chunkId)
-            && request.resource.data.i < maxChunks()
-            && request.resource.data.data is bytes
-            && request.resource.data.data.size() <= chunkBytes();
-          allow delete: if inDm() && resource.data.uid == request.auth.uid;
+          allow create: if inDm() && validChunk(chunkId);
+          allow delete: if isAdmin() || (inDm() && resource.data.uid == request.auth.uid);
         }
       }
     }

@@ -4,7 +4,9 @@ export function createDemoBackend() {
   const PAGE_SIZE = 10;
   // 데모에서는 관리자 화면도 확인 가능. ?demo&guest 로 열면 '초대받지 않은 사람' 화면을 볼 수 있음
   const guest = new URLSearchParams(location.search).has("guest");
-  const me = { uid: "me", name: "김학생", email: guest ? "stranger@gmail.com" : "student@example.com", photo: "", isAdmin: !guest };
+  // ?demo&student 로 열면 일반 학생 화면
+  const student = new URLSearchParams(location.search).has("student");
+  const me = { uid: "me", name: "김학생", email: guest ? "stranger@gmail.com" : "student@example.com", photo: "", isAdmin: !guest && !student, isOwner: !guest && !student };
   const friend = { uid: "u2", name: "이친구", photo: "" };
   const t = (min) => new Date(Date.now() - min * 60000);
   const mk = (id, who, min, extra) => ({ id, uid: who.uid, name: who.name, photo: "", createdAt: t(min), ...extra });
@@ -13,7 +15,7 @@ export function createDemoBackend() {
   let authCb = () => {};
   const rooms = [
     { id: "r1", name: "2학년 3반", notice: { text: "내일은 현장체험학습! 8시 40분까지 운동장에 모여요 🚌" } },
-    { id: "r2", name: "과학 동아리" },
+    { id: "r2", name: "과학 동아리", visibility: "private", members: ["me", "u2"] },
     { id: "r3", name: "수행평가 조별과제" },
   ];
   const messages = {
@@ -25,6 +27,8 @@ export function createDemoBackend() {
       mk("m2", me, 28, { type: "text", text: "오 알려줘서 고마워", replyTo: { id: "m1", name: friend.name, text: "내일 체육 수업 운동장에서 한대!" } }),
       mk("m3", friend, 10, { type: "file", file: { id: "f1", name: "가정통신문_11월.pdf", size: 482133, contentType: "application/pdf" }, reactions: { me: "❤️", u3: "❤️", u4: "😂" } }),
       mk("m4", friend, 9, { type: "text", text: "준비물 목록은 https://example.com 에 있어" }),
+      mk("m4b", friend, 8, { type: "text", text: "아 진짜 시발 늦잠 잤어 ㅠㅠ" }),
+      mk("p1", friend, 7, { type: "poll", poll: { question: "현장체험학습 점심 메뉴는?", options: ["김밥 🍙", "샌드위치 🥪", "주먹밥"] }, votes: { u2: 0, u3: 0, u4: 1 } }),
     ],
     r2: [mk("m5", friend, 120, { type: "text", text: "이번 주 실험 준비물 정리해서 올릴게" })],
     r3: [],
@@ -58,6 +62,11 @@ export function createDemoBackend() {
   const emitUsers = () => userSubs.forEach((cb) => cb(structuredClone(users)));
   const emitBans = () => banSubs.forEach((cb) => cb(new Set(banned)));
   let myName = null;
+  let filterWords = null; // null = 기본 금지어 사용
+  const filterSubs = new Set();
+  const adminList = new Set(["teacher.park@gmail.com"]);
+  const adminSubs = new Set();
+  const deletedFiles = new Set();
   const roomSubs = new Set();
   const msgSubs = new Map(); // roomId -> Set(cb)
 
@@ -66,7 +75,7 @@ export function createDemoBackend() {
     return {
       ...r, kind,
       lastMessageAt: last?.createdAt ?? null,
-      lastMessage: last && { uid: last.uid, name: last.name, text: last.type === "file" ? "📎 " + last.file.name : last.text },
+      lastMessage: last && { uid: last.uid, name: last.name, text: last.type === "file" ? "📎 " + last.file.name : last.type === "poll" ? "📊 투표: " + last.poll.question : last.text },
     };
   });
   const latest = (roomId) => (messages[roomId] || []).slice(-PAGE_SIZE).map((m) => ({ ...m, _ts: m.createdAt }));
@@ -94,7 +103,44 @@ export function createDemoBackend() {
     async signOut() { user = null; authCb(null); },
 
     listenRooms(cb) { roomSubs.add(cb); cb(roomView()); return () => roomSubs.delete(cb); },
-    async createRoom(name) { rooms.push({ id: crypto.randomUUID(), name }); emitRooms(); },
+    async createRoom(name, { visibility = "public", members = [] } = {}) {
+      rooms.push({ id: crypto.randomUUID(), name, visibility, ...(visibility === "private" ? { members } : {}) }); emitRooms();
+    },
+    async setRoomAccess(roomId, { visibility, members }) {
+      const r = rooms.find((x) => x.id === roomId); r.visibility = visibility;
+      if (visibility === "private") r.members = members; else delete r.members;
+      emitRooms();
+    },
+    async migrateRooms(list) { const old = rooms.filter((r) => !r.visibility); old.forEach((r) => (r.visibility = "public")); if (old.length) emitRooms(); return old.length; },
+    async editMessage(roomId, msg, text) { const m = messages[roomId].find((x) => x.id === msg.id); m.text = text; m.editedAt = new Date(); emitMsgs(roomId); },
+    async sendPoll(roomId, question, options) { push(roomId, { type: "poll", poll: { question, options } }); },
+    async vote(roomId, msg, index) {
+      const m = messages[roomId].find((x) => x.id === msg.id); m.votes ||= {};
+      if (index === null) delete m.votes.me; else m.votes.me = index;
+      emitMsgs(roomId);
+    },
+    async closePoll(roomId, msg) { messages[roomId].find((x) => x.id === msg.id).closed = true; emitMsgs(roomId); },
+    async setTyping() {},
+    listenTyping(roomId, cb) {
+      // 데모: 2학년 3반에서는 친구가 입력 중인 것처럼 보여 줌
+      cb(roomId === "r1" ? [{ uid: "u2", at: new Date() }] : []);
+      const t = setInterval(() => cb(roomId === "r1" ? [{ uid: "u2", at: new Date() }] : []), 3000);
+      return () => clearInterval(t);
+    },
+    listenFilter(cb) { filterSubs.add(cb); cb(filterWords); return () => filterSubs.delete(cb); },
+    async saveFilter(words) { filterWords = words; filterSubs.forEach((cb) => cb(words)); },
+    listenAdmins(cb) { adminSubs.add(cb); cb([...adminList]); return () => adminSubs.delete(cb); },
+    async addAdmin(email) { adminList.add(email.toLowerCase()); adminSubs.forEach((cb) => cb([...adminList])); },
+    async removeAdmin(email) { adminList.delete(email); adminSubs.forEach((cb) => cb([...adminList])); },
+    async scanStorage() {
+      const day = 86400000;
+      return [
+        { id: "f1", kind: "rooms", roomId: "r1", size: 482133, chunkCount: 1, at: new Date(Date.now() - 2 * day) },
+        { id: "fo1", kind: "rooms", roomId: "r1", size: 3200000, chunkCount: 4, at: new Date(Date.now() - 45 * day) },
+        { id: "fo2", kind: "dms", roomId: "dm_me_u2", size: 1500000, chunkCount: 2, at: new Date(Date.now() - 60 * day) },
+      ].filter((f) => !deletedFiles.has(f.id));
+    },
+    async deleteFiles(entries, onProgress) { let n = 0; for (const f of entries) { deletedFiles.add(f.id); delete blobs[f.id]; onProgress?.(++n, entries.length); } },
 
     listenMessages(roomId, cb) {
       const off = sub(roomId, () => cb(latest(roomId)));
