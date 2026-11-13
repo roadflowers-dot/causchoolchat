@@ -1,4 +1,9 @@
 <!doctype html>
+<!--
+  © 2026 중대부초 실시간 채팅방. All rights reserved. 무단 복제·배포·수정 금지.
+  이 웹사이트의 디자인과 코드는 중대부초 실시간 채팅방 전용입니다.
+  허락 없이 복사하거나 다른 곳에서 사용할 수 없습니다.
+-->
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
@@ -6,6 +11,7 @@
   <meta name="color-scheme" content="light dark" />
   <meta name="theme-color" content="#ffffff" />
   <title>중대부초 실시간 채팅방</title>
+  <meta name="copyright" content="© 2026 중대부초 실시간 채팅방. All rights reserved." />
   <!-- 앱 설치 (PWA) -->
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" type="image/png" href="icons/favicon-64.png" />
@@ -38,6 +44,7 @@
       </button>
       <p id="login-error" class="error" hidden></p>
       <button class="install-btn login-install" hidden>📲 앱으로 설치하기</button>
+      <p class="copyright">© 2026 중대부초 실시간 채팅방<br />All rights reserved · 무단 복제·배포 금지</p>
       <p class="recaptcha-note">이 사이트는 reCAPTCHA로 보호되며 Google
         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">개인정보처리방침</a>과
         <a href="https://policies.google.com/terms" target="_blank" rel="noopener">서비스 약관</a>이 적용됩니다.</p>
@@ -71,6 +78,7 @@
       </header>
       <ul id="room-list" class="room-list"></ul>
       <button class="install-btn sidebar-install" hidden>📲 앱으로 설치하기</button>
+      <div class="copyright sidebar-copyright">© 2026 중대부초 실시간 채팅방 · 무단 복제 금지</div>
       <footer class="me">
         <button id="profile-btn" class="me-profile" title="프로필 수정">
           <span id="me-avatar"></span>

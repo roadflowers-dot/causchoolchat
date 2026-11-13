@@ -1,3 +1,6 @@
+// © 2026 중대부초 실시간 채팅방. All rights reserved. 무단 복제·배포·수정 금지.
+// 이 코드는 중대부초 실시간 채팅방 전용입니다. 허락 없이 복사하거나 다른 곳에서 사용할 수 없습니다.
+
 import { firebaseConfig, ALLOWED_EMAIL_DOMAIN, MAX_FILE_MB, APPCHECK_SITE_KEY } from "./firebase-config.js";
 
 const SITE_TITLE = "중대부초 실시간 채팅방";
