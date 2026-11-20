@@ -35,7 +35,7 @@
   <!-- ① 로그인 화면 -->
   <section id="login-view" class="login-view" hidden>
     <div class="login-card">
-      <div class="logo">💬</div>
+      <img class="login-logo" src="img/logo-512.webp" alt="Zinfty 로고" width="200" height="200" />
       <h1>중대부초<br />실시간 채팅방</h1>
       <p>구글 계정으로 로그인하세요.</p>
       <button id="login-btn" class="google-btn">
@@ -68,7 +68,7 @@
     <!-- 왼쪽: 채팅방 목록 -->
     <aside id="sidebar" class="sidebar">
       <header class="sidebar-header">
-        <strong class="brand">💬 중대부초</strong>
+        <strong class="brand"><img class="brand-logo" src="img/logo-128.webp" alt="Zinfty 로고" width="36" height="36" />중대부초</strong>
         <div class="header-actions">
           <button id="admin-btn" class="icon-btn" title="관리자 메뉴" hidden>👑<span id="admin-badge-count" class="count-badge" hidden></span></button>
           <button id="notify-btn" class="icon-btn" title="새 메시지 알림 켜기">🔕</button>
@@ -95,6 +95,7 @@
     <main class="room">
       <header class="room-header">
         <button id="menu-btn" class="icon-btn menu-btn" title="채팅방 목록">☰<span id="menu-dot" class="dot" hidden></span></button>
+        <img class="header-logo" src="img/logo-128.webp" alt="Zinfty 로고" width="32" height="32" />
         <span id="room-icon" class="room-icon"></span>
         <h2 id="room-title">채팅방을 선택하세요</h2>
         <button id="files-btn" class="pill-btn" title="이 방에 공유된 파일">📎 파일함</button>
